@@ -1,8 +1,10 @@
 import { detect, type Finding } from './detect';
+import { createDummyText } from './dummy';
 
-type Action = 'blur' | 'dummy' | 'redact' | 'restore';
-type Target = { kind: 'text'; element: HTMLElement } | { kind: 'image'; element: HTMLImageElement } | { kind: 'selection'; range: Range } | { kind: 'field'; element: HTMLInputElement | HTMLTextAreaElement };
+type Action = 'blur' | 'dummy' | 'redact' | 'restore' | 'removeHighlight';
+type Target = { kind: 'text'; element: HTMLElement } | { kind: 'image'; element: HTMLImageElement } | { kind: 'selection'; range: Range } | { kind: 'field'; element: HTMLInputElement | HTMLTextAreaElement; start: number; end: number };
 const originalText = new WeakMap<HTMLElement, DocumentFragment>();
+const ignoredText = new WeakSet<Text>();
 const originalImages = new WeakMap<HTMLImageElement, { src: string; srcset: string; alt: string; filter: string }>();
 let currentTarget: Target | null = null;
 let pendingSelection: Range | null = null;
@@ -15,12 +17,13 @@ let aiSettingsTimer = 0;
 
 const style = document.createElement('style');
 style.textContent = `
-  .pl-finding { cursor:pointer!important; border-radius:3px!important; box-decoration-break:clone!important; -webkit-box-decoration-break:clone!important; }
-  .pl-finding.pl-high { background:#ffb4b4!important; color:#391113!important; box-shadow:0 0 0 1px #d94242!important; }
-  .pl-finding.pl-medium { background:#ffe9a0!important; color:#4a3600!important; box-shadow:0 0 0 1px #d69a08!important; }
+  .pl-finding { cursor:pointer!important; border:none!important; border-radius:0!important; box-shadow:none!important; box-decoration-break:clone!important; -webkit-box-decoration-break:clone!important; }
+  .pl-finding.pl-high { background:#ffd8dc!important; color:#4a1b24!important; }
+  .pl-finding.pl-medium { background:#fff0b8!important; color:#514000!important; }
   .pl-finding.pl-blur { filter:blur(5px)!important; user-select:none!important; }
   .pl-finding.pl-blur:hover { filter:blur(5px)!important; }
   .pl-finding.pl-masked { background:#191d27!important; color:white!important; padding:0 3px!important; }
+  .pl-finding.pl-dummy { background:transparent!important; color:inherit!important; padding:0!important; }
 `;
 (document.head || document.documentElement).append(style);
 
@@ -31,53 +34,100 @@ document.documentElement.append(host);
 const shadow = host.attachShadow({ mode: 'closed' });
 const uiStyle = document.createElement('style');
 uiStyle.textContent = `
-  *{box-sizing:border-box} .panel{position:fixed;display:none;min-width:210px;max-width:300px;background:#151a27;color:#fff;border:1px solid #424a62;border-radius:10px;box-shadow:0 12px 35px #0006;padding:10px;font:13px system-ui;pointer-events:auto}
-  .panel.show{display:block}.title{font-weight:700;margin:0 0 7px}.buttons{display:flex;flex-wrap:wrap;gap:6px}button{background:#30394e;color:white;border:1px solid #63708d;border-radius:6px;padding:6px 8px;cursor:pointer;font:12px system-ui}button:hover{background:#425373}.notice{position:fixed;display:none;max-width:310px;background:#fff4d7;color:#493300;border:1px solid #d49400;border-radius:8px;box-shadow:0 9px 25px #0004;padding:9px 11px;font:12px system-ui;pointer-events:none}.notice.show{display:block}
+  * { box-sizing:border-box; }
+  .bubble { position:fixed; width:min(310px, calc(100vw - 16px)); padding:19px 21px 20px; background:#3d3a48; color:#f8f7fb; border-radius:17px; box-shadow:0 10px 26px #24212e3d; font:13px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; visibility:hidden; opacity:0; transform:translateY(var(--enter-y, 6px)) scale(.98); transition:opacity 160ms ease,transform 220ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 220ms; pointer-events:none; }
+  .bubble.below { --enter-y:-6px; }
+  .bubble.show { visibility:visible; opacity:1; transform:translateY(0) scale(1); transition-delay:0s; }
+  .bubble::after { content:""; position:absolute; left:var(--pointer-x, 50%); bottom:-10px; transform:translateX(-50%); border-left:10px solid transparent; border-right:10px solid transparent; border-top:11px solid #3d3a48; }
+  .bubble.below::after { top:-10px; bottom:auto; border-top:0; border-bottom:11px solid #3d3a48; }
+  .brand { display:flex; align-items:center; gap:8px; margin-bottom:6px; color:#fff; font-size:13px; font-weight:700; }
+  .brand-icon { display:grid; place-items:center; width:19px; height:19px; border:2px solid #a9a5ff; border-radius:50%; color:#b8b4ff; font-size:12px; font-weight:750; line-height:1; }
+  .copy { color:#dedbe6; overflow-wrap:anywhere; }
+  .panel.show { pointer-events:auto; }
+  .buttons { display:flex; flex-wrap:wrap; gap:7px; margin-top:14px; }
+  button { background:#555160; color:#fff; border:1px solid #706b7b; border-radius:7px; padding:7px 10px; cursor:pointer; font:12px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; transition:background-color 160ms ease,transform 160ms ease; }
+  button:hover,button:focus-visible { background:#696473; transform:translateY(-1px); outline:2px solid #a9a5ff; outline-offset:1px; }
+  .notice { pointer-events:none; }
+  .hint { width:min(230px, calc(100vw - 16px)); padding:11px 13px 12px; border-radius:12px; font-size:11px; line-height:1.4; }
+  .hint .brand { font-size:11px; gap:6px; margin-bottom:4px; }
+  .hint .brand-icon { width:15px; height:15px; border-width:1.5px; font-size:10px; }
+  @media (prefers-reduced-motion:reduce) { .bubble,button { transition:none; } }
 `;
 shadow.append(uiStyle);
 const panel = document.createElement('div');
-panel.className = 'panel';
+panel.className = 'bubble panel';
 panel.setAttribute('role', 'dialog');
 panel.setAttribute('aria-label', 'TekaSend actions');
-const title = document.createElement('div'); title.className = 'title';
+const panelBrand = document.createElement('div'); panelBrand.className = 'brand';
+const panelIcon = document.createElement('span'); panelIcon.className = 'brand-icon'; panelIcon.textContent = 'i';
+panelBrand.append(panelIcon, document.createTextNode('TekaSend'));
+const title = document.createElement('div'); title.className = 'copy';
 const buttons = document.createElement('div'); buttons.className = 'buttons';
-panel.append(title, buttons);
+panel.append(panelBrand, title, buttons);
 shadow.append(panel);
-const notice = document.createElement('div'); notice.className = 'notice'; notice.setAttribute('role', 'status'); shadow.append(notice);
+const notice = document.createElement('div'); notice.className = 'bubble notice'; notice.setAttribute('role', 'status');
+const noticeBrand = panelBrand.cloneNode(true);
+const noticeCopy = document.createElement('div'); noticeCopy.className = 'copy';
+notice.append(noticeBrand, noticeCopy); shadow.append(notice);
+const hint = document.createElement('div'); hint.className = 'bubble hint'; hint.setAttribute('role', 'tooltip');
+const hintCopy = document.createElement('div'); hintCopy.className = 'copy';
+hint.append(panelBrand.cloneNode(true), hintCopy); shadow.append(hint);
+let activeHintFinding: HTMLElement | null = null;
 let noticeTimeout = 0;
 
+function placeBubble(element: HTMLElement, rect: DOMRect) {
+  element.classList.add('show');
+  const width = element.offsetWidth;
+  const height = element.offsetHeight;
+  const center = rect.left + rect.width / 2;
+  const left = Math.max(8, Math.min(center - width / 2, innerWidth - width - 8));
+  const above = rect.top - height - 18 >= 8 || rect.bottom + height + 18 > innerHeight - 8;
+  const top = above ? Math.max(8, rect.top - height - 18) : Math.max(8, Math.min(rect.bottom + 18, innerHeight - height - 8));
+  element.classList.toggle('below', !above);
+  element.style.left = `${left}px`;
+  element.style.top = `${top}px`;
+  element.style.setProperty('--pointer-x', `${Math.max(22, Math.min(width - 22, center - left))}px`);
+}
+
 function showNotice(message: string, rect: DOMRect) {
-  notice.textContent = message;
-  notice.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - 320))}px`;
-  notice.style.top = `${Math.max(8, Math.min(rect.bottom + 6, innerHeight - 85))}px`;
-  notice.classList.add('show');
+  noticeCopy.textContent = message;
+  placeBubble(notice, rect);
   clearTimeout(noticeTimeout);
   noticeTimeout = window.setTimeout(() => notice.classList.remove('show'), 6500);
 }
 
 function showMenu(target: Target, rect: DOMRect, label: string) {
   currentTarget = target;
-  title.textContent = label;
+  activeHintFinding = null;
+  hint.classList.remove('show');
+  title.textContent = label.replace(/ · click for actions$/, '');
   buttons.replaceChildren();
-  const actions: Action[] = target.kind === 'selection' || target.kind === 'field' ? ['blur', 'dummy', 'redact'] : ['blur', 'dummy', 'redact', 'restore'];
+  const actions: Action[] = target.kind === 'selection' || target.kind === 'field'
+    ? ['blur', 'dummy', 'redact']
+    : target.kind === 'text' && !target.element.classList.contains('pl-manual')
+      ? ['blur', 'dummy', 'redact', 'removeHighlight']
+      : ['blur', 'dummy', 'redact', 'restore'];
   for (const action of actions) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = action === 'dummy' ? 'Dummy text' : action[0].toUpperCase() + action.slice(1);
+    button.textContent = action === 'dummy' ? 'Dummy text' : action === 'removeHighlight' ? 'Remove highlight' : action[0].toUpperCase() + action.slice(1);
     button.addEventListener('click', () => { if (currentTarget) applyAction(currentTarget, action); hideMenu(); });
     buttons.append(button);
   }
-  panel.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - 315))}px`;
-  panel.style.top = `${Math.max(8, Math.min(rect.bottom + 8, innerHeight - 90))}px`;
-  panel.classList.add('show');
+  placeBubble(panel, rect);
 }
 function hideMenu() { panel.classList.remove('show'); currentTarget = null; }
+
+function findingLabel(element: HTMLElement) {
+  if (element.classList.contains('pl-manual')) return 'Manually masked text';
+  const level = element.classList.contains('pl-medium') ? 'Personal information' : 'Confidential information';
+  return `${level}: ${element.getAttribute('data-pl-type') || 'text'}`;
+}
 
 function createFinding(finding: Pick<Finding, 'type' | 'severity'>, text: string): HTMLElement {
   const span = document.createElement('span');
   span.className = `pl-finding pl-${finding.severity}`;
   span.setAttribute('data-pl-type', finding.type);
-  span.title = `${finding.severity === 'high' ? 'Confidential' : 'Personal'}: ${finding.type} · click for actions`;
   span.textContent = text;
   const fragment = document.createDocumentFragment(); fragment.append(document.createTextNode(text));
   originalText.set(span, fragment);
@@ -86,7 +136,7 @@ function createFinding(finding: Pick<Finding, 'type' | 'severity'>, text: string
 
 function eligible(node: Text): boolean {
   const parent = node.parentElement;
-  return !!parent && !!node.nodeValue?.trim() && !parent.closest('script,style,noscript,textarea,input,select,option,code,pre,[contenteditable],.pl-finding,[data-privacy-lens-ui]') && getComputedStyle(parent).display !== 'none';
+  return !!parent && !ignoredText.has(node) && !!node.nodeValue?.trim() && !parent.closest('script,style,noscript,textarea,input,select,option,code,pre,[contenteditable],.pl-finding,[data-privacy-lens-ui]') && getComputedStyle(parent).display !== 'none';
 }
 
 function wrapNode(node: Text, findings: Finding[]): void {
@@ -137,8 +187,8 @@ function applyAction(target: Target, action: Action) {
   if (target.kind === 'field') {
     const field = target.element;
     if (action === 'blur') { field.style.filter = 'blur(5px)'; showNotice('Blur applies to the whole field. Click the field to edit it.', field.getBoundingClientRect()); return; }
-    const start = field.selectionStart ?? 0, end = field.selectionEnd ?? field.value.length;
-    const replacement = action === 'redact' ? '[REDACTED]' : 'example@example.com';
+    const { start, end } = target;
+    const replacement = action === 'redact' ? '[REDACTED]' : createDummyText(field.value.slice(start, end));
     field.setRangeText(replacement, start, end, 'end');
     field.dispatchEvent(new Event('input', { bubbles: true }));
     return;
@@ -147,27 +197,77 @@ function applyAction(target: Target, action: Action) {
   if (target.kind === 'selection') {
     const range = target.range;
     if (range.collapsed || !range.commonAncestorContainer.isConnected) return;
-    element = document.createElement('span'); element.className = 'pl-finding pl-high'; element.setAttribute('data-pl-type', 'Manual selection');
+    element = document.createElement('span'); element.className = 'pl-finding pl-manual'; element.setAttribute('data-pl-type', 'Manual selection');
     const original = range.extractContents(); originalText.set(element, original.cloneNode(true) as DocumentFragment); element.append(original); range.insertNode(element);
+    pendingSelection = null;
     getSelection()?.removeAllRanges();
   } else element = target.element;
   const original = originalText.get(element);
+  if (action === 'removeHighlight') {
+    if (original) {
+      const restored = original.cloneNode(true) as DocumentFragment;
+      const walker = document.createTreeWalker(restored, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) ignoredText.add(walker.currentNode as Text);
+      element.replaceWith(restored);
+    }
+    return;
+  }
   if (action === 'restore') { if (original) element.replaceWith(original.cloneNode(true)); return; }
-  element.classList.remove('pl-blur', 'pl-masked');
+  const sourceText = original?.textContent ?? element.textContent ?? '';
+  element.classList.remove('pl-blur', 'pl-masked', 'pl-dummy');
   if (original) element.replaceChildren(original.cloneNode(true));
   if (action === 'blur') element.classList.add('pl-blur');
-  else { element.classList.add('pl-masked'); element.textContent = action === 'redact' ? `[REDACTED: ${element.getAttribute('data-pl-type') || 'text'}]` : dummyFor(element.getAttribute('data-pl-type') || ''); }
+  else if (action === 'dummy') { element.classList.add('pl-dummy'); element.textContent = createDummyText(sourceText); }
+  else { element.classList.add('pl-masked'); element.textContent = `[REDACTED: ${element.getAttribute('data-pl-type') || 'text'}]`; }
 }
-
-function dummyFor(type: string) { return /email/i.test(type) ? 'user@example.com' : /phone/i.test(type) ? '0912 345 6789' : /password/i.test(type) ? 'example-password' : /image/i.test(type) ? '[Sample image]' : 'example-value'; }
 
 document.addEventListener('click', event => {
   const target = event.target;
   if (!(target instanceof Element) || target.closest('[data-privacy-lens-ui]')) return;
   const finding = target.closest('.pl-finding');
-  if (finding instanceof HTMLElement) { event.preventDefault(); event.stopPropagation(); showMenu({ kind: 'text', element: finding }, finding.getBoundingClientRect(), finding.title || 'Sensitive text'); return; }
+  if (finding instanceof HTMLElement) { event.preventDefault(); event.stopPropagation(); hint.classList.remove('show'); showMenu({ kind: 'text', element: finding }, finding.getBoundingClientRect(), findingLabel(finding)); return; }
   if (target instanceof HTMLImageElement) { event.preventDefault(); event.stopPropagation(); pendingImage = target; showMenu({ kind: 'image', element: target }, target.getBoundingClientRect(), 'Image actions'); return; }
   hideMenu();
+}, true);
+
+function updateFindingHint(event: PointerEvent) {
+  const finding = event.target instanceof Element ? event.target.closest('.pl-finding') : null;
+  if (!(finding instanceof HTMLElement)) {
+    if (activeHintFinding) { activeHintFinding = null; hint.classList.remove('show'); }
+    return;
+  }
+  if (panel.classList.contains('show')) return;
+  if (finding === activeHintFinding && hint.classList.contains('show')) return;
+  activeHintFinding = finding;
+  hintCopy.textContent = finding.classList.contains('pl-manual') ? 'Manually masked text. Click for actions.' : `${finding.getAttribute('data-pl-type') || 'Sensitive text'} detected. Click for actions.`;
+  placeBubble(hint, finding.getBoundingClientRect());
+}
+
+document.addEventListener('pointerover', updateFindingHint, true);
+document.addEventListener('pointermove', updateFindingHint, true);
+
+function pointInsideSelection(range: Range, x: number, y: number) {
+  return Array.from(range.getClientRects()).some(rect => x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom);
+}
+
+document.addEventListener('pointermove', event => {
+  if (!pendingSelection || panel.classList.contains('show') || !pendingSelection.commonAncestorContainer.isConnected) return;
+  if (pointInsideSelection(pendingSelection, event.clientX, event.clientY)) {
+    showMenu({ kind: 'selection', range: pendingSelection.cloneRange() }, pendingSelection.getBoundingClientRect(), 'Selected text');
+  }
+}, true);
+
+document.addEventListener('pointerdown', event => {
+  if (event.target instanceof Element && event.target.closest('[data-privacy-lens-ui]')) return;
+  if (pendingSelection && !pointInsideSelection(pendingSelection, event.clientX, event.clientY)) pendingSelection = null;
+}, true);
+
+document.addEventListener('pointerout', event => {
+  const finding = event.target instanceof Element ? event.target.closest('.pl-finding') : null;
+  if (finding && (!(event.relatedTarget instanceof Node) || !finding.contains(event.relatedTarget))) {
+    activeHintFinding = null;
+    hint.classList.remove('show');
+  }
 }, true);
 
 document.addEventListener('contextmenu', event => {
@@ -180,14 +280,14 @@ document.addEventListener('mouseup', event => {
   if (event.button !== 0) return;
   const active = document.activeElement;
   if ((active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) && active.selectionStart !== active.selectionEnd) {
-    showMenu({ kind: 'field', element: active }, active.getBoundingClientRect(), 'Selected field text'); return;
+    showMenu({ kind: 'field', element: active, start: active.selectionStart!, end: active.selectionEnd! }, active.getBoundingClientRect(), 'Selected field text'); return;
   }
   const selection = getSelection();
-  if (!selection || selection.isCollapsed || !selection.rangeCount || !selection.toString().trim()) return;
+  if (!selection || selection.isCollapsed || !selection.rangeCount || !selection.toString().trim()) { pendingSelection = null; return; }
   const range = selection.getRangeAt(0).cloneRange();
   if (range.commonAncestorContainer.parentElement?.closest('[data-privacy-lens-ui]')) return;
   pendingSelection = range.cloneRange();
-  showMenu({ kind: 'selection', range }, range.getBoundingClientRect(), 'Selected text');
+  hideMenu();
 });
 
 document.addEventListener('paste', event => {
