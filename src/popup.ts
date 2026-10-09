@@ -3,14 +3,13 @@
  *
  * Manages:
  * - Detection category toggles (PRD F1 / F5)
- * - Default repair strategy segmented control (PRD F2)
  * - Three-way theme selection: Auto / Light / Dark
  * - On-device AI model status display
  * - Scan trigger with live results breakdown card
  */
 
-import { RepairStrategyType } from './ai/types.js';
 import { ModelStatusResponse } from './shared/types/messages.js';
+import { DEFAULT_EFFECT, isEffect, type Effect } from './shared/effects.js';
 
 // ── Local Types ────────────────────────────────────────────────
 
@@ -21,7 +20,9 @@ interface PopupSettings {
   readonly enablePassword:   boolean;
   readonly enablePersonal:   boolean;
   readonly enableFinancial:  boolean;
-  readonly defaultStrategy:  RepairStrategyType;
+  readonly defaultEffect:    Effect;
+  readonly hideByDefault:   boolean;
+  readonly showHoverTooltip: boolean;
   readonly themeMode:        ThemeMode;
 }
 
@@ -49,6 +50,9 @@ class PopupController {
   private readonly catPassword = document.querySelector<HTMLInputElement>('#cat_password')!;
   private readonly catPersonal = document.querySelector<HTMLInputElement>('#cat_personal')!;
   private readonly catFinancial= document.querySelector<HTMLInputElement>('#cat_financial')!;
+  private readonly effectRadios = document.querySelectorAll<HTMLInputElement>('input[name="defaultEffect"]');
+  private readonly hideByDefault = document.querySelector<HTMLInputElement>('#hideByDefault')!;
+  private readonly showHoverTooltip = document.querySelector<HTMLInputElement>('#showHoverTooltip')!;
 
   // Scan action
   private readonly scanPageBtn   = document.querySelector<HTMLButtonElement>('#scanPageBtn')!;
@@ -58,11 +62,14 @@ class PopupController {
   private readonly aiStatusPill = document.querySelector<HTMLElement>('#aiStatusPill')!;
   private readonly aiStatusText = document.querySelector<HTMLElement>('#aiStatusText')!;
 
+  // Optional cloud fallback
+  private readonly cloudEnabled = document.querySelector<HTMLInputElement>('#cloudEnabled')!;
+  private readonly cloudApiKey = document.querySelector<HTMLInputElement>('#cloudApiKey')!;
+  private readonly cloudState = document.querySelector<HTMLElement>('#cloudState')!;
+  private readonly cloudFeedback = document.querySelector<HTMLElement>('#cloudFeedback')!;
+
   // Theme buttons
   private readonly themeBtns = document.querySelectorAll<HTMLButtonElement>('.theme-btn');
-
-  // Repair strategy segments
-  private readonly segmentBtns = document.querySelectorAll<HTMLButtonElement>('.seg');
 
   // Results card elements
   private readonly resultsEmpty   = document.querySelector<HTMLElement>('#resultsEmpty')!;
@@ -73,8 +80,9 @@ class PopupController {
   private readonly resultsBreakdown = document.querySelector<HTMLElement>('#resultsBreakdown')!;
 
   // Internal state
-  private currentStrategy: RepairStrategyType = 'semantic_placeholder';
-  private currentTheme: ThemeMode = 'auto';
+  private currentTheme: ThemeMode = 'light';
+  private currentEffect: Effect = DEFAULT_EFFECT;
+  private modelStatusRequestId = 0;
 
   public constructor() {
     void this.init();
@@ -91,21 +99,22 @@ class PopupController {
   // ── Event Wiring ─────────────────────────────────────────────
 
   private attachEventListeners(): void {
+    document.querySelector<HTMLButtonElement>('#closePopup')!.addEventListener('click', () => window.close());
+
     // Category toggle switches
     for (const toggle of [this.catApiKey, this.catPassword, this.catPersonal, this.catFinancial]) {
       toggle.addEventListener('change', () => void this.saveSettings());
     }
-
-    // Repair strategy segmented buttons
-    this.segmentBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const strategy = btn.getAttribute('data-strategy') as RepairStrategyType;
-        if (strategy) {
-          this.setStrategy(strategy);
+    this.effectRadios.forEach(radio => {
+      radio.addEventListener('change', () => {
+        if (radio.checked && isEffect(radio.value)) {
+          this.currentEffect = radio.value;
           void this.saveSettings();
         }
       });
     });
+    this.hideByDefault.addEventListener('change', () => void this.saveSettings());
+    this.showHoverTooltip.addEventListener('change', () => void this.saveSettings());
 
     // Three-way theme buttons
     this.themeBtns.forEach(btn => {
@@ -120,6 +129,15 @@ class PopupController {
 
     // Scan action
     this.scanPageBtn.addEventListener('click', () => void this.handleScanPage());
+
+    this.cloudEnabled.addEventListener('change', () => {
+      this.showCloudFeedback('Save to apply this setting.', 'normal');
+    });
+    this.cloudApiKey.addEventListener('input', () => {
+      this.showCloudFeedback('Save to apply this key.', 'normal');
+    });
+    document.querySelector<HTMLButtonElement>('#saveCloud')!.addEventListener('click', () => void this.saveCloudSettings());
+    document.querySelector<HTMLButtonElement>('#clearCloud')!.addEventListener('click', () => void this.clearCloudSettings());
   }
 
   // ── Settings Persistence ──────────────────────────────────────
@@ -128,7 +146,7 @@ class PopupController {
   private async loadSettings(): Promise<void> {
     const data = await chrome.storage.local.get([
       'enableApiKey', 'enablePassword', 'enablePersonal', 'enableFinancial',
-      'defaultStrategy', 'themeMode'
+      'defaultEffect', 'hideByDefault', 'showHoverTooltip', 'themeMode', 'cloudEnabled', 'apiKey'
     ]);
 
     this.catApiKey.checked    = data.enableApiKey    !== false;
@@ -136,12 +154,18 @@ class PopupController {
     this.catPersonal.checked  = data.enablePersonal  !== false;
     this.catFinancial.checked = data.enableFinancial !== false;
 
-    if (data.defaultStrategy) {
-      this.setStrategy(data.defaultStrategy as RepairStrategyType);
-    }
+    this.currentEffect = isEffect(data.defaultEffect) ? data.defaultEffect : DEFAULT_EFFECT;
+    this.effectRadios.forEach(radio => { radio.checked = radio.value === this.currentEffect; });
+    this.hideByDefault.checked = data.hideByDefault === true;
+    this.showHoverTooltip.checked = data.showHoverTooltip !== false;
 
     const savedTheme = data.themeMode as ThemeMode | undefined;
-    this.applyTheme(savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : 'auto');
+    this.applyTheme(savedTheme === 'auto' || savedTheme === 'dark' ? savedTheme : 'light');
+
+    // Legacy aiEnabled is deliberately ignored. Cloud use requires explicit opt-in.
+    this.cloudEnabled.checked = data.cloudEnabled === true;
+    this.cloudApiKey.value = typeof data.apiKey === 'string' ? data.apiKey : '';
+    this.updateCloudState(this.cloudEnabled.checked);
   }
 
   /** Persists current settings to chrome.storage.local. */
@@ -151,10 +175,51 @@ class PopupController {
       enablePassword:  this.catPassword.checked,
       enablePersonal:  this.catPersonal.checked,
       enableFinancial: this.catFinancial.checked,
-      defaultStrategy: this.currentStrategy,
+      defaultEffect:   this.currentEffect,
+      hideByDefault:  this.hideByDefault.checked,
+      showHoverTooltip: this.showHoverTooltip.checked,
       themeMode:       this.currentTheme,
     };
     await chrome.storage.local.set(settings);
+  }
+
+  private async saveCloudSettings(): Promise<void> {
+    const apiKey = this.cloudApiKey.value.trim();
+    if (this.cloudEnabled.checked && !apiKey) {
+      this.showCloudFeedback('Enter an API key to enable OpenAI fallback.', 'error');
+      return;
+    }
+
+    try {
+      await chrome.storage.local.set({ cloudEnabled: this.cloudEnabled.checked, apiKey });
+      this.updateCloudState(this.cloudEnabled.checked);
+      this.showCloudFeedback(this.cloudEnabled.checked ? 'OpenAI fallback enabled.' : 'OpenAI fallback is off.', 'success');
+    } catch {
+      this.showCloudFeedback('Could not save fallback settings.', 'error');
+    }
+  }
+
+  private async clearCloudSettings(): Promise<void> {
+    try {
+      await chrome.storage.local.set({ cloudEnabled: false });
+      await chrome.storage.local.remove(['apiKey', 'aiEnabled']);
+      this.cloudEnabled.checked = false;
+      this.cloudApiKey.value = '';
+      this.updateCloudState(false);
+      this.showCloudFeedback('API key removed. OpenAI fallback is off.', 'success');
+    } catch {
+      this.showCloudFeedback('Could not remove the API key.', 'error');
+    }
+  }
+
+  private updateCloudState(enabled: boolean): void {
+    this.cloudState.textContent = enabled ? 'On' : 'Off';
+    this.cloudState.classList.toggle('enabled', enabled);
+  }
+
+  private showCloudFeedback(message: string, type: 'success' | 'error' | 'normal'): void {
+    this.cloudFeedback.textContent = message;
+    this.cloudFeedback.className = `cloud-feedback ${type}`;
   }
 
   // ── Theme ─────────────────────────────────────────────────────
@@ -176,52 +241,58 @@ class PopupController {
     });
   }
 
-  // ── Repair Strategy ───────────────────────────────────────────
-
-  /** Updates the segmented control to reflect the active strategy. */
-  private setStrategy(strategy: RepairStrategyType): void {
-    this.currentStrategy = strategy;
-    this.segmentBtns.forEach(btn => {
-      const isActive = btn.getAttribute('data-strategy') === strategy;
-      btn.classList.toggle('active', isActive);
-      btn.setAttribute('aria-pressed', String(isActive));
-    });
-  }
-
   // ── AI Model Status ───────────────────────────────────────────
 
   /** Queries the background worker for on-device model status and updates the pill UI. */
   private async checkModelStatus(): Promise<void> {
+    const requestId = ++this.modelStatusRequestId;
     try {
       const response = (await chrome.runtime.sendMessage({
         kind: 'MODEL_STATUS_REQUEST'
       })) as ModelStatusResponse;
 
-      if (!response?.ok || !response.status) return;
+      if (requestId !== this.modelStatusRequestId) return;
 
-      const { state, progress } = response.status;
+      if (!response?.ok || !response.status) {
+        this.setStatusPill('error', 'Model status unavailable');
+        return;
+      }
 
-      if (state === 'ready') {
-        this.setStatusPill('ready', 'Shield-82M · On-Device');
-      } else if (state === 'downloading') {
-        this.setStatusPill('loading', `Loading model… ${progress ?? 0}%`);
-      } else {
-        this.setStatusPill('ready', 'Shield-82M Local');
+      const { state, progress, errorMessage } = response.status;
+      switch (state) {
+        case 'unloaded':
+          this.setStatusPill('idle', 'Local model not loaded', 'Loads on the first scan.');
+          break;
+        case 'downloading': {
+          const percent = typeof progress === 'number' && Number.isFinite(progress)
+            ? ` ${Math.max(0, Math.min(100, Math.round(progress)))}%`
+            : '';
+          this.setStatusPill('loading', `Loading local model…${percent}`);
+          break;
+        }
+        case 'ready':
+          this.setStatusPill('ready', 'Local model ready');
+          break;
+        case 'error':
+          this.setStatusPill('error', 'Local model unavailable', errorMessage);
+          break;
+        default:
+          this.setStatusPill('error', 'Unknown model status');
       }
     } catch {
-      // Background not yet loaded — show a neutral ready state
-      this.setStatusPill('ready', 'Shield-82M · On-Device');
+      if (requestId !== this.modelStatusRequestId) return;
+      this.setStatusPill('error', 'Model status unavailable', 'Could not reach the extension background worker.');
     }
   }
 
   /**
    * Updates the status pill appearance.
-   * @param state - Visual state: ready | loading | error
-   * @param label - Text to display in the pill
    */
-  private setStatusPill(state: 'ready' | 'loading' | 'error', label: string): void {
+  private setStatusPill(state: 'idle' | 'ready' | 'loading' | 'error', label: string, detail?: string): void {
     this.aiStatusText.textContent = label;
-    this.aiStatusPill.classList.remove('warning', 'error');
+    this.aiStatusPill.title = detail || label;
+    this.aiStatusPill.classList.remove('idle', 'warning', 'error');
+    if (state === 'idle') this.aiStatusPill.classList.add('idle');
     if (state === 'loading') this.aiStatusPill.classList.add('warning');
     if (state === 'error')   this.aiStatusPill.classList.add('error');
   }
@@ -238,8 +309,9 @@ class PopupController {
       return;
     }
 
-    this.showFeedback('Scanning with on-device AI…', 'normal');
+    this.showFeedback('Scanning the page…', 'normal');
     this.scanPageBtn.disabled = true;
+    const modelStatusTimer = window.setInterval(() => void this.checkModelStatus(), 1000);
 
     try {
       const result = await chrome.tabs.sendMessage(activeTab.id, { kind: 'SCAN_AI' });
@@ -249,14 +321,21 @@ class PopupController {
         const breakdown = result.breakdown as FindingBreakdown | undefined;
         this.renderResultsCard(breakdown ?? { apiKey: 0, password: 0, personal: 0, financial: 0, total: 0 });
         this.persistLastScanResults(breakdown ?? { apiKey: 0, password: 0, personal: 0, financial: 0, total: 0 });
-        this.showFeedback('Scan complete — see highlights on page.', 'success');
+        const providerMessage = result.provider === 'cloud'
+          ? 'Scan complete using OpenAI fallback.'
+          : result.provider === 'local'
+            ? 'Scan complete on device.'
+            : 'Scan complete.';
+        this.showFeedback(`${providerMessage} Check page highlights.`, 'success');
       } else {
         this.showFeedback(result?.error ?? 'Scan complete.', 'normal');
       }
     } catch {
-      this.showFeedback('Reload the page and try again.', 'error');
+      this.showFeedback('Cannot access this page. Check TekaSend site access and reload the page.', 'error');
     } finally {
+      window.clearInterval(modelStatusTimer);
       this.scanPageBtn.disabled = false;
+      await this.checkModelStatus();
     }
   }
 

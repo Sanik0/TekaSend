@@ -1,55 +1,95 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TekaSend — Privacy Guard</title>
+  <title>TekaSend Settings</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div class="window">
 
-    <!-- ── Header ─────────────────────────────────────────────── -->
+    <!-- Settings-style navigation and app identity -->
     <header class="app-header">
-      <div class="brand">
-        <!-- Shield SVG icon -->
-        <div class="brand-icon" aria-hidden="true">
-          <svg width="18" height="20" viewBox="0 0 18 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M9 1L1.5 4.5V9.5C1.5 13.64 4.79 17.5 9 18.5C13.21 17.5 16.5 13.64 16.5 9.5V4.5L9 1Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-            <path d="M6 10L8 12L12 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <div class="nav-bar">
+        <button type="button" class="back-disc" id="closePopup" aria-label="Close settings">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="m10 3-5 5 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-        </div>
-        <div class="brand-text">
-          <h1 class="app-title">TekaSend</h1>
-          <p class="app-tagline">Teka muna. Check bago send.</p>
-        </div>
+        </button>
+        <span class="nav-title">Settings</span>
+        <span class="nav-spacer" aria-hidden="true"></span>
       </div>
-
-      <!-- Three-way theme segmented control -->
-      <div class="theme-control" role="radiogroup" aria-label="Theme preference">
-        <button type="button" class="theme-btn active" data-theme-value="auto"   id="themeAuto"  aria-pressed="true">Auto</button>
-        <button type="button" class="theme-btn"        data-theme-value="light"  id="themeLight" aria-pressed="false">Light</button>
-        <button type="button" class="theme-btn"        data-theme-value="dark"   id="themeDark"  aria-pressed="false">Dark</button>
+      <div class="app-identity">
+        <h1 class="app-title">TekaSend</h1>
       </div>
     </header>
 
-    <!-- ── AI Status pill ─────────────────────────────────────── -->
-    <div class="status-pill" id="aiStatusPill" role="status" aria-live="polite">
-      <span class="status-dot" id="aiStatusDot"></span>
-      <span class="status-label" id="aiStatusText">Shield-82M · On-Device</span>
-    </div>
-
-    <!-- ── Main scroll area ───────────────────────────────────── -->
+    <!-- Main settings groups -->
     <main class="content">
+
+      <section class="section" aria-label="Local AI model">
+        <p class="section-label">On-Device Detection</p>
+        <div class="card model-card">
+          <span class="row-icon model-icon" aria-hidden="true">✦</span>
+          <span class="model-title">Local AI model</span>
+          <div class="status-pill idle" id="aiStatusPill" role="status" aria-live="polite">
+            <span class="status-dot" id="aiStatusDot"></span>
+            <span class="status-label" id="aiStatusText">Checking local model…</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-label="Masking effect">
+        <p class="section-label">Masking Effect</p>
+        <div class="card effect-card" role="radiogroup" aria-label="Effect applied to detected text">
+          <label class="effect-row">
+            <span class="row-icon effect-icon" aria-hidden="true">◌</span>
+            <span class="effect-copy"><span class="row-title">Blur</span><span class="row-desc">Soft focus</span></span>
+            <input class="effect-radio" type="radio" name="defaultEffect" value="blur">
+          </label>
+          <div class="separator"></div>
+          <label class="effect-row">
+            <span class="row-icon effect-icon" aria-hidden="true">Aa</span>
+            <span class="effect-copy"><span class="row-title">Replace values</span><span class="row-desc">Dummy text, same length</span></span>
+            <input class="effect-radio" type="radio" name="defaultEffect" value="dummy">
+          </label>
+          <div class="separator"></div>
+          <label class="effect-row">
+            <span class="row-icon effect-icon" aria-hidden="true">[ ]</span>
+            <span class="effect-copy"><span class="row-title">Placeholder</span><span class="row-desc">A label in place of the text</span></span>
+            <input class="effect-radio" type="radio" name="defaultEffect" value="placeholder">
+          </label>
+          <div class="separator"></div>
+          <label class="effect-row">
+            <span class="row-icon effect-icon" aria-hidden="true">✦</span>
+            <span class="effect-copy"><span class="row-title">Spoiler</span><span class="row-desc">Floating particles</span></span>
+            <input class="effect-radio" type="radio" name="defaultEffect" value="spoiler" checked>
+          </label>
+        </div>
+        <p class="effect-hint">The selected effect masks detected text on click, or automatically when Hide by default is on. Click masked text to restore.</p>
+        <div class="card auto-mask-card">
+          <label class="row" for="hideByDefault">
+            <div class="row-info">
+              <span class="row-icon icon-appearance" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12s3.3-5 9-5 9 5 9 5-3.3 5-9 5-9-5-9-5Z"/><circle cx="12" cy="12" r="2.5"/><path d="M4 20 20 4"/></svg></span>
+              <div>
+                <span class="row-title">Hide by default</span>
+                <span class="row-desc">Mask detected text as pages load</span>
+              </div>
+            </div>
+            <input type="checkbox" id="hideByDefault" class="toggle">
+          </label>
+        </div>
+      </section>
 
       <!-- Detection Categories -->
       <section class="section" aria-label="Detection categories">
-        <p class="section-label">Detection Categories</p>
+        <p class="section-label">Detection</p>
         <div class="card">
 
           <label class="row" for="cat_api_key">
             <div class="row-info">
-              <span class="row-icon" aria-hidden="true">🔑</span>
+              <span class="row-icon icon-key" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="9" r="3.5"/><path d="m10.5 11.5 8 8M16 17l2-2m-4 0 2-2"/></svg></span>
               <div>
                 <span class="row-title">API Keys &amp; Tokens</span>
                 <span class="row-desc">OpenAI, GitHub, AWS credentials</span>
@@ -62,7 +102,7 @@
 
           <label class="row" for="cat_password">
             <div class="row-info">
-              <span class="row-icon" aria-hidden="true">🔒</span>
+              <span class="row-icon icon-lock" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v2"/></svg></span>
               <div>
                 <span class="row-title">Passwords &amp; Secrets</span>
                 <span class="row-desc">Plain-text secrets and auth tokens</span>
@@ -75,10 +115,10 @@
 
           <label class="row" for="cat_personal">
             <div class="row-info">
-              <span class="row-icon" aria-hidden="true">👤</span>
+              <span class="row-icon icon-person" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span>
               <div>
                 <span class="row-title">Personal Information</span>
-                <span class="row-desc">Emails, phone numbers, full names</span>
+                <span class="row-desc">Names, emails, phone numbers</span>
               </div>
             </div>
             <input type="checkbox" id="cat_personal" class="toggle" checked>
@@ -88,7 +128,7 @@
 
           <label class="row" for="cat_financial">
             <div class="row-info">
-              <span class="row-icon" aria-hidden="true">💳</span>
+              <span class="row-icon icon-card" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M7 15h4"/></svg></span>
               <div>
                 <span class="row-title">Payment &amp; IDs</span>
                 <span class="row-desc">Credit cards, SSN, government IDs</span>
@@ -100,29 +140,39 @@
         </div>
       </section>
 
-      <!-- Repair Mode -->
-      <section class="section" aria-label="Repair mode">
-        <p class="section-label">Default Repair Mode</p>
-        <div class="segmented" role="radiogroup" aria-label="Repair strategy">
-          <button type="button" class="seg active" data-strategy="semantic_placeholder" id="stratPlaceholder" aria-pressed="true">
-            <span class="seg-icon">🏷</span> Placeholder
-          </button>
-          <button type="button" class="seg" data-strategy="synthetic_dummy" id="stratDummy" aria-pressed="false">
-            <span class="seg-icon">🎲</span> Scramble
-          </button>
-          <button type="button" class="seg" data-strategy="solid_redact" id="stratRedact" aria-pressed="false">
-            <span class="seg-icon">⬛</span> Redact
-          </button>
-        </div>
+      <section class="section" aria-label="Optional OpenAI fallback">
+        <p class="section-label">Optional Cloud Fallback</p>
+        <details class="card cloud-card">
+          <summary class="cloud-summary">
+            <span class="row-icon icon-cloud" aria-hidden="true">☁</span>
+            <span class="cloud-summary-title">OpenAI if local AI fails</span>
+            <span id="cloudState" class="cloud-state">Off</span>
+            <span class="chevron" aria-hidden="true">›</span>
+          </summary>
+          <div class="cloud-fields">
+            <p class="cloud-copy">Off by default. If enabled and local AI fails, TekaSend sends up to 5,000 characters of page or pasted text to OpenAI. API usage may cost money.</p>
+            <label class="cloud-toggle-row" for="cloudEnabled">
+              <span>Enable OpenAI fallback</span>
+              <input type="checkbox" id="cloudEnabled" class="toggle">
+            </label>
+            <label class="cloud-key-label" for="cloudApiKey">OpenAI API key</label>
+            <input type="password" id="cloudApiKey" class="cloud-key-input" placeholder="sk-…" autocomplete="off" spellcheck="false">
+            <div class="cloud-actions">
+              <button type="button" id="saveCloud" class="cloud-save">Save settings</button>
+              <button type="button" id="clearCloud" class="cloud-clear">Remove key</button>
+            </div>
+            <p id="cloudFeedback" class="cloud-feedback" role="status" aria-live="polite"></p>
+          </div>
+        </details>
       </section>
 
       <!-- Scan Results Card -->
       <section class="section" aria-label="Scan results" id="resultsSection">
-        <p class="section-label">Last Scan Results</p>
+        <p class="section-label">Last Scan</p>
         <div class="card results-card" id="resultsCard">
           <!-- Empty state -->
           <div id="resultsEmpty" class="results-empty">
-            <span class="results-empty-icon" aria-hidden="true">🛡️</span>
+            <span class="row-icon icon-results" aria-hidden="true">✓</span>
             <p class="results-empty-text">No scan run yet on this page</p>
           </div>
           <!-- Populated state (hidden by default) -->
@@ -139,23 +189,48 @@
         </div>
       </section>
 
-      <!-- Scan Action -->
       <section class="section" aria-label="Page scan action">
         <div class="card action-card">
           <button type="button" id="scanPageBtn" class="btn-primary">
-            <span class="btn-icon" aria-hidden="true">🔍</span>
-            Scan Active Page
+            <span class="row-icon icon-scan" aria-hidden="true">⌕</span>
+            <span class="action-label">Scan Active Page</span>
+            <span class="chevron" aria-hidden="true">›</span>
           </button>
           <p id="statusFeedback" class="feedback" role="status" aria-live="polite"></p>
         </div>
       </section>
 
+      <section class="section" aria-label="Appearance">
+        <p class="section-label">Appearance</p>
+        <div class="card appearance-card">
+          <div class="appearance-row">
+            <span class="row-icon icon-appearance" aria-hidden="true">◐</span>
+            <span class="row-title">Theme</span>
+          </div>
+          <div class="theme-control" role="group" aria-label="Theme preference">
+            <button type="button" class="theme-btn" data-theme-value="auto" id="themeAuto" aria-pressed="false">Auto</button>
+            <button type="button" class="theme-btn active" data-theme-value="light" id="themeLight" aria-pressed="true">Light</button>
+            <button type="button" class="theme-btn" data-theme-value="dark" id="themeDark" aria-pressed="false">Dark</button>
+          </div>
+        </div>
+        <div class="card tooltip-card">
+          <label class="row" for="showHoverTooltip">
+            <div class="row-info">
+              <span class="row-icon icon-appearance" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></svg></span>
+              <div>
+                <span class="row-title">Show hover tips</span>
+                <span class="row-desc">Hints over highlighted text</span>
+              </div>
+            </div>
+            <input type="checkbox" id="showHoverTooltip" class="toggle" checked>
+          </label>
+        </div>
+      </section>
+
     </main>
 
-    <!-- ── Footer ─────────────────────────────────────────────── -->
     <footer class="app-footer">
-      <span class="footer-dot" aria-hidden="true">●</span>
-      <span class="footer-text">100% On-Device AI — Zero cloud transmission</span>
+      <span class="footer-text">Local first. OpenAI is used only if enabled and local AI fails.</span>
     </footer>
 
   </div>

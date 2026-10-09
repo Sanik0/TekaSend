@@ -45,25 +45,17 @@ export class AiClassifier {
       return [];
     }
 
-    try {
-      const pipeline = await this.pipelineManager.getPipeline(onProgress);
-      // Run token classification with entity grouping
-      const rawResults = (await pipeline(text, {
-        ignore_labels: ['O'],
-        aggregation_strategy: 'simple'
-      })) as RawTokenOutput[] | RawTokenOutput;
+    const pipeline = await this.pipelineManager.getPipeline(onProgress);
+    const rawResults = (await pipeline(text, {
+      ignore_labels: ['O'],
+      aggregation_strategy: 'simple'
+    })) as RawTokenOutput[] | RawTokenOutput;
 
-      const tokenArray: RawTokenOutput[] = Array.isArray(rawResults)
-        ? rawResults
-        : [rawResults];
+    const tokenArray: RawTokenOutput[] = Array.isArray(rawResults)
+      ? rawResults
+      : [rawResults];
 
-      return this.transformTokensToFindings(tokenArray, text, confidenceThreshold);
-    } catch (error) {
-      // Gracefully handle model loading / runtime errors without throwing
-      // The hybrid scanner will still provide deterministic regex protection
-      console.warn('[AiClassifier] On-device classification bypassed or unavailable:', error);
-      return [];
-    }
+    return this.transformTokensToFindings(tokenArray, text, confidenceThreshold);
   }
 
   /**
@@ -121,7 +113,25 @@ export class AiClassifier {
       });
     }
 
-    return findings;
+    findings.sort((a, b) => a.start - b.start);
+    const merged: SensitiveFinding[] = [];
+    for (const finding of findings) {
+      const previous = merged[merged.length - 1];
+      const between = previous ? sourceText.slice(previous.end, finding.start) : '';
+      if (previous?.category === 'person_name' && finding.category === 'person_name' &&
+          finding.start >= previous.end && /^[ \t'’-]{0,3}$/u.test(between)) {
+        merged[merged.length - 1] = {
+          ...previous,
+          id: `ai_person_name_${previous.start}_${finding.end}`,
+          rawText: sourceText.slice(previous.start, finding.end),
+          end: finding.end,
+          confidence: Math.min(previous.confidence, finding.confidence)
+        };
+      } else {
+        merged.push(finding);
+      }
+    }
+    return merged;
   }
 
   /**
@@ -145,7 +155,7 @@ export class AiClassifier {
     if (tag.includes('CARD') || tag.includes('CREDIT') || tag.includes('BANK')) {
       return { category: 'credit_card', severity: 'critical', label: 'Payment Card / Account', defaultReplacement: '[CARD_NUMBER]' };
     }
-    if (tag.includes('PER') || tag.includes('NAME')) {
+    if (/^(?:B-|I-)?(?:FIRSTNAME|MIDDLENAME|LASTNAME|PERSON|PER)$/.test(tag)) {
       return { category: 'person_name', severity: 'medium', label: 'Personal Name', defaultReplacement: '[PERSON_NAME]' };
     }
     if (tag.includes('LOC') || tag.includes('STREET') || tag.includes('CITY') || tag.includes('ADDRESS')) {

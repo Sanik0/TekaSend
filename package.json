@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "model:download": "node scripts/download-model.mjs",
     "demo": "node scripts/serve-demo.mjs",
     "watch": "node scripts/build.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/",
+    "test": "node --test tests/*.test.mjs",
     "smoke": "node scripts/smoke-test.mjs"
   },
   "devDependencies": {

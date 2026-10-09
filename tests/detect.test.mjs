@@ -15,3 +15,25 @@ test('classifies a password and an API key as high sensitivity', () => {
   assert.deepEqual(findings.map(item => item.type), ['Password', 'API key']);
   assert.ok(findings.every(item => item.severity === 'high'));
 });
+
+test('filtering a disabled category still finds enabled matches inside its span', () => {
+  const findings = detect('password = sk-proj-FAKEEXAMPLEKEY1234567890', item => item.type !== 'Password');
+  assert.deepEqual(findings.map(item => item.type), ['API key']);
+});
+
+test('detects full names and context-labeled single names as personal information', () => {
+  const findings = detect('Olivia Chen met Juan Dela Cruz and Maria dela Cruz. Name: Maya. Dear Ana,');
+  assert.deepEqual(findings.filter(item => item.type === 'Personal name').map(item => item.text),
+    ['Olivia Chen', 'Juan Dela Cruz', 'Maria dela Cruz', 'Maya', 'Ana']);
+  assert.ok(findings.filter(item => item.type === 'Personal name').every(item => item.severity === 'medium'));
+});
+
+test('does not treat ordinary page labels and street names as people', () => {
+  const findings = detect('Visible Text appears on Oak Street in New York. This is normal.');
+  assert.equal(findings.filter(item => item.type === 'Personal name').length, 0);
+});
+
+test('personal information category can exclude name findings', () => {
+  const findings = detect('Olivia Chen uses alex@example.com', item => item.type !== 'Personal name');
+  assert.deepEqual(findings.map(item => item.type), ['Email']);
+});

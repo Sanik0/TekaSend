@@ -20,6 +20,7 @@ const {
   DeterministicRuleMatcher,
   ContextAnalyzer,
   RiskAnalyzer,
+  AiClassifier,
   HybridScanner,
   PrivacyReplacer,
   LocalRepairVerifier
@@ -109,4 +110,28 @@ test('HybridScanner combines deterministic regex and enriches findings with risk
   assert.equal(result.findings[0].category, 'api_key');
   assert.ok(result.findings[0].riskExplanation?.includes('AWS'));
   assert.ok(result.findings[0].recommendedAction?.length > 0);
+});
+
+test('HybridScanner reports a model load failure instead of claiming an AI scan succeeded', async () => {
+  const manager = { getPipeline: async () => { throw new Error('Model files are missing'); } };
+  const scanner = new HybridScanner(undefined, new AiClassifier(manager));
+  await assert.rejects(scanner.scan('Contact alex@example.com'), /Model files are missing/);
+});
+
+test('local model joins adjacent first and last name tokens into one finding', async () => {
+  const manager = { getPipeline: async () => async () => [
+    { entity_group: 'FIRSTNAME', score: 0.96, word: 'Olivia', start: 0, end: 6 },
+    { entity_group: 'LASTNAME', score: 0.93, word: 'Chen', start: 7, end: 11 }
+  ] };
+  const findings = await new AiClassifier(manager).classify('Olivia Chen');
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rawText, 'Olivia Chen');
+  assert.equal(findings[0].category, 'person_name');
+});
+
+test('hybrid scanner reports a full name as personal information without the model', async () => {
+  const result = await new HybridScanner().scan('Patient: Olivia Chen', { enableAi: false });
+  const name = result.findings.find(item => item.category === 'person_name');
+  assert.equal(name?.rawText, 'Olivia Chen');
+  assert.equal(name?.severity, 'medium');
 });

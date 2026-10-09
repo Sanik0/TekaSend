@@ -3,7 +3,7 @@
  *
  * Runs a complete live verification of:
  * 1. High-precision Deterministic Regex Rules
- * 2. On-Device Shield-82M-ONNX AI Inference
+ * 2. AI subsystem compilation (model inference is disabled in this smoke test)
  * 3. Unified Hybrid Scanning & Span Merging
  * 4. Smart Privacy Repair (PRD F2)
  * 5. Pre-Flight Verification Engine (PRD F3)
@@ -85,7 +85,7 @@ try {
     console.log('-'.repeat(70));
   }
 
-  console.log('\n🤖 [4/4] Testing On-Device Hybrid Scanner Performance...');
+  console.log('\n🤖 [4/4] Testing Deterministic Hybrid Scanner Performance...');
   const sampleBenchmark = 'sk-proj-samplekey12345678901234567890 and email admin@tekasend.dev';
   const hybridResult = await scanner.scan(sampleBenchmark, { enableAi: false });
 

@@ -1,45 +1,73 @@
 import { detect, type Finding } from './detect';
 import { createDummyText } from './dummy';
-import {
-  DeterministicRuleMatcher,
-  PrivacyReplacer,
-  LocalRepairVerifier,
-  RiskAnalyzer,
-  FindingCategory
-} from './ai/index.js';
+import { RiskAnalyzer } from './ai/reasoning/risk-analyzer.js';
+import type { FindingCategory } from './ai/types.js';
+import { SpoilerRenderer } from './spoiler.js';
+import { DEFAULT_EFFECT, isEffect, type Effect } from './shared/effects.js';
 
-type Action = 'blur' | 'placeholder' | 'dummy' | 'redact' | 'restore' | 'removeHighlight';
-type Target =
-  | { kind: 'text'; element: HTMLElement }
-  | { kind: 'image'; element: HTMLImageElement }
-  | { kind: 'selection'; range: Range }
-  | { kind: 'field'; element: HTMLInputElement | HTMLTextAreaElement; start: number; end: number };
+type Action = Effect | 'restore';
+type DetectionCategory = 'apiKey' | 'password' | 'personal' | 'financial';
+type DisplayFinding = Finding & { category?: FindingCategory };
+type Target = { kind: 'text'; element: HTMLElement };
 
 const originalText = new WeakMap<HTMLElement, DocumentFragment>();
-const ignoredText = new WeakSet<Text>();
-const originalImages = new WeakMap<HTMLImageElement, { src: string; srcset: string; alt: string; filter: string }>();
 
-const ruleMatcher = new DeterministicRuleMatcher();
-const privacyReplacer = new PrivacyReplacer();
-const repairVerifier = new LocalRepairVerifier();
 const riskAnalyzer = new RiskAnalyzer();
 
-let currentTarget: Target | null = null;
-let pendingSelection: Range | null = null;
-let pendingImage: HTMLImageElement | null = null;
 let scanTimer = 0;
 let fieldTimer = 0;
 let aiScanned = false;
 let aiError = '';
 let aiSettingsTimer = 0;
+let selectedEffect: Effect = DEFAULT_EFFECT;
+let hideByDefault = false;
+let showHoverTooltip = true;
+const categoryKeys: DetectionCategory[] = ['apiKey', 'password', 'personal', 'financial'];
+const storageCategoryKey = (category: DetectionCategory): string => `enable${category[0].toUpperCase()}${category.slice(1)}`;
+const enabledCategories: Record<DetectionCategory, boolean> = {
+  apiKey: true,
+  password: true,
+  personal: true,
+  financial: true
+};
+
+function detectionCategory(type: string, modelCategory?: FindingCategory): DetectionCategory {
+  if (modelCategory) {
+    if (modelCategory === 'api_key' || modelCategory === 'private_key' || modelCategory === 'bearer_token') return 'apiKey';
+    if (modelCategory === 'password') return 'password';
+    if (modelCategory === 'credit_card' || modelCategory === 'ssn') return 'financial';
+    return 'personal';
+  }
+  const label = type.toLowerCase();
+  if (/credit|card|ssn|financial|tax|government|bank account/.test(label)) return 'financial';
+  if (/api|token|private key|bearer|auth key|secret key/.test(label)) return 'apiKey';
+  if (/password|passwd|pwd|credential|secret/.test(label)) return 'password';
+  return 'personal';
+}
+
+function categoryEnabled(type: string, modelCategory?: FindingCategory): boolean {
+  return enabledCategories[detectionCategory(type, modelCategory)];
+}
 
 const style = document.createElement('style');
 style.textContent = `
   .pl-finding { cursor:pointer!important; border:none!important; border-radius:0!important; box-shadow:none!important; box-decoration-break:clone!important; -webkit-box-decoration-break:clone!important; }
   .pl-finding.pl-high { background:#ffd8dc!important; color:#4a1b24!important; }
   .pl-finding.pl-medium { background:#fff0b8!important; color:#514000!important; }
-  .pl-finding.pl-blur { filter:blur(5px)!important; user-select:none!important; }
-  .pl-finding.pl-blur:hover { filter:blur(5px)!important; }
+  .pl-finding.pl-spoiler {
+    background-color:#f9f9fa!important;
+    background-image:none!important;
+  }
+  .pl-finding.pl-spoiler, .pl-finding.pl-spoiler * {
+    color:transparent!important;
+    -webkit-text-fill-color:transparent!important;
+    text-shadow:none!important;
+    text-decoration-color:transparent!important;
+  }
+  .pl-finding.pl-spoiler { filter:none!important; user-select:none!important; }
+  .pl-finding.pl-spoiler * { background-color:transparent!important; background-image:none!important; }
+  .pl-finding.pl-blur { background:transparent!important; color:inherit!important; filter:blur(5px)!important; user-select:none!important; }
+  .pl-finding.pl-blur .pl-finding { background:transparent!important; }
   .pl-finding.pl-masked { background:#191d27!important; color:white!important; padding:0 3px!important; }
   .pl-finding.pl-dummy { background:transparent!important; color:inherit!important; padding:0!important; }
 `;
@@ -54,7 +82,8 @@ const shadow = host.attachShadow({ mode: 'closed' });
 const uiStyle = document.createElement('style');
 uiStyle.textContent = `
   * { box-sizing:border-box; }
-  .bubble { position:fixed; width:min(320px, calc(100vw - 16px)); padding:19px 21px 20px; background:#3d3a48; color:#f8f7fb; border-radius:17px; box-shadow:0 10px 26px #24212e3d; font:13px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; visibility:hidden; opacity:0; transform:translateY(var(--enter-y, 6px)) scale(.98); transition:opacity 160ms ease,transform 220ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 220ms; pointer-events:none; }
+  .spoiler-canvas { position:fixed; inset:0; width:100vw; height:100vh; pointer-events:none; z-index:0; }
+  .bubble { position:fixed; z-index:1; width:min(320px, calc(100vw - 16px)); padding:19px 21px 20px; background:#3d3a48; color:#f8f7fb; border-radius:17px; box-shadow:0 10px 26px #24212e3d; font:13px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; visibility:hidden; opacity:0; transform:translateY(var(--enter-y, 6px)) scale(.98); transition:opacity 160ms ease,transform 220ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 220ms; pointer-events:none; }
   .bubble.below { --enter-y:-6px; }
   .bubble.show { visibility:visible; opacity:1; transform:translateY(0) scale(1); transition-delay:0s; }
   .bubble::after { content:""; position:absolute; left:var(--pointer-x, 50%); bottom:-10px; transform:translateX(-50%); border-left:10px solid transparent; border-right:10px solid transparent; border-top:11px solid #3d3a48; }
@@ -62,39 +91,25 @@ uiStyle.textContent = `
   .brand { display:flex; align-items:center; gap:8px; margin-bottom:6px; color:#fff; font-size:13px; font-weight:700; }
   .brand-icon { display:grid; place-items:center; width:19px; height:19px; border:2px solid #a9a5ff; border-radius:50%; color:#b8b4ff; font-size:12px; font-weight:750; line-height:1; }
   .copy { color:#dedbe6; overflow-wrap:anywhere; }
-  .panel.show { pointer-events:auto; }
-  .buttons { display:flex; flex-wrap:wrap; gap:7px; margin-top:14px; }
-  button { background:#555160; color:#fff; border:1px solid #706b7b; border-radius:7px; padding:7px 10px; cursor:pointer; font:12px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; transition:background-color 160ms ease,transform 160ms ease; }
-  button:hover,button:focus-visible { background:#696473; transform:translateY(-1px); outline:2px solid #a9a5ff; outline-offset:1px; }
   .notice { pointer-events:none; }
   .hint { width:min(260px, calc(100vw - 16px)); padding:11px 13px 12px; border-radius:12px; font-size:11px; line-height:1.4; }
   .hint .brand { font-size:11px; gap:6px; margin-bottom:4px; }
   .hint .brand-icon { width:15px; height:15px; border-width:1.5px; font-size:10px; }
-  @media (prefers-reduced-motion:reduce) { .bubble,button { transition:none; } }
+  @media (prefers-reduced-motion:reduce) { .bubble { transition:none; } }
 `;
 shadow.append(uiStyle);
+const spoiler = new SpoilerRenderer(shadow);
 
-const panel = document.createElement('div');
-panel.className = 'bubble panel';
-panel.setAttribute('role', 'dialog');
-panel.setAttribute('aria-label', 'TekaSend actions');
-const panelBrand = document.createElement('div');
-panelBrand.className = 'brand';
-const panelIcon = document.createElement('span');
-panelIcon.className = 'brand-icon';
-panelIcon.textContent = 'i';
-panelBrand.append(panelIcon, document.createTextNode('TekaSend'));
-const title = document.createElement('div');
-title.className = 'copy';
-const buttons = document.createElement('div');
-buttons.className = 'buttons';
-panel.append(panelBrand, title, buttons);
-shadow.append(panel);
-
+const brand = document.createElement('div');
+brand.className = 'brand';
+const brandIcon = document.createElement('span');
+brandIcon.className = 'brand-icon';
+brandIcon.textContent = 'i';
+brand.append(brandIcon, document.createTextNode('TekaSend'));
 const notice = document.createElement('div');
 notice.className = 'bubble notice';
 notice.setAttribute('role', 'status');
-const noticeBrand = panelBrand.cloneNode(true);
+const noticeBrand = brand.cloneNode(true);
 const noticeCopy = document.createElement('div');
 noticeCopy.className = 'copy';
 notice.append(noticeBrand, noticeCopy);
@@ -105,7 +120,7 @@ hint.className = 'bubble hint';
 hint.setAttribute('role', 'tooltip');
 const hintCopy = document.createElement('div');
 hintCopy.className = 'copy';
-hint.append(panelBrand.cloneNode(true), hintCopy);
+hint.append(brand.cloneNode(true), hintCopy);
 shadow.append(hint);
 
 let activeHintFinding: HTMLElement | null = null;
@@ -132,58 +147,43 @@ function showNotice(message: string, rect: DOMRect): void {
   noticeTimeout = window.setTimeout(() => notice.classList.remove('show'), 6500);
 }
 
-function showMenu(target: Target, rect: DOMRect, label: string): void {
-  currentTarget = target;
-  activeHintFinding = null;
-  hint.classList.remove('show');
-  title.textContent = label.replace(/ · click for actions$/, '');
-  buttons.replaceChildren();
+function isTextAltered(element: HTMLElement): boolean {
+  return ['pl-blur', 'pl-spoiler', 'pl-masked', 'pl-dummy'].some(name => element.classList.contains(name));
+}
 
-  const actions: Action[] = target.kind === 'selection' || target.kind === 'field'
-    ? ['placeholder', 'dummy', 'redact', 'blur']
-    : target.kind === 'text' && !target.element.classList.contains('pl-manual')
-      ? ['placeholder', 'dummy', 'redact', 'blur', 'removeHighlight']
-      : ['placeholder', 'dummy', 'redact', 'blur', 'restore'];
+function applyAutomaticMask(element: HTMLElement): void {
+  if (!element.isConnected || isTextAltered(element)) return;
+  applyAction({ kind: 'text', element }, selectedEffect);
+  element.setAttribute('data-pl-auto-mask', '');
+}
 
-  for (const action of actions) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    let buttonText = '';
-    switch (action) {
-      case 'placeholder': buttonText = 'Placeholder'; break;
-      case 'dummy': buttonText = 'Dummy text'; break;
-      case 'redact': buttonText = 'Redact'; break;
-      case 'blur': buttonText = 'Blur'; break;
-      case 'restore': buttonText = 'Restore'; break;
-      case 'removeHighlight': buttonText = 'Remove highlight'; break;
+function syncAutomaticMasking(effectChanged = false, maskUnaltered = true): void {
+  for (const element of Array.from(document.querySelectorAll<HTMLElement>('.pl-finding'))) {
+    const autoMasked = element.hasAttribute('data-pl-auto-mask');
+    if (!hideByDefault) {
+      if (autoMasked) applyAction({ kind: 'text', element }, 'restore');
+    } else if (autoMasked && effectChanged) {
+      applyAction({ kind: 'text', element }, selectedEffect);
+    } else if (!autoMasked && maskUnaltered) {
+      applyAutomaticMask(element);
     }
-    button.textContent = buttonText;
-    button.addEventListener('click', () => {
-      if (currentTarget) {
-        applyAction(currentTarget, action);
-      }
-      hideMenu();
-    });
-    buttons.append(button);
   }
-  placeBubble(panel, rect);
 }
 
-function hideMenu(): void {
-  panel.classList.remove('show');
-  currentTarget = null;
+function effectLabel(effect: Effect): string {
+  switch (effect) {
+    case 'blur': return 'blur';
+    case 'dummy': return 'replace values';
+    case 'placeholder': return 'insert a placeholder';
+    case 'spoiler': return 'show the particle spoiler';
+  }
 }
 
-function findingLabel(element: HTMLElement): string {
-  if (element.classList.contains('pl-manual')) return 'Manually masked text';
-  const level = element.classList.contains('pl-medium') ? 'Personal information' : 'Confidential information';
-  return `${level}: ${element.getAttribute('data-pl-type') || 'text'}`;
-}
-
-function createFinding(finding: Pick<Finding, 'type' | 'severity'>, text: string): HTMLElement {
+function createFinding(finding: Pick<DisplayFinding, 'type' | 'severity' | 'category'>, text: string): HTMLElement {
   const span = document.createElement('span');
   span.className = `pl-finding pl-${finding.severity}`;
   span.setAttribute('data-pl-type', finding.type);
+  span.setAttribute('data-pl-category', detectionCategory(finding.type, finding.category));
   span.textContent = text;
   const fragment = document.createDocumentFragment();
   fragment.append(document.createTextNode(text));
@@ -195,162 +195,119 @@ function eligible(node: Text): boolean {
   const parent = node.parentElement;
   return (
     !!parent &&
-    !ignoredText.has(node) &&
     !!node.nodeValue?.trim() &&
-    !parent.closest('script,style,noscript,textarea,input,select,option,code,pre,[contenteditable],.pl-finding,[data-privacy-lens-ui]') &&
+    !parent.closest('script,style,noscript,textarea,input,select,option,[contenteditable],.pl-finding,[data-privacy-lens-ui]') &&
     getComputedStyle(parent).display !== 'none'
   );
 }
 
-function wrapNode(node: Text, findings: Finding[]): void {
+function wrapNode(node: Text, findings: DisplayFinding[]): void {
   const value = node.nodeValue || '';
   if (!findings.length || !node.parentNode) return;
   const fragment = document.createDocumentFragment();
+  const newHighlights: HTMLElement[] = [];
   let offset = 0;
   for (const item of findings) {
     if (item.start < offset || item.end > value.length) continue;
     if (item.start > offset) fragment.append(document.createTextNode(value.slice(offset, item.start)));
-    fragment.append(createFinding(item, value.slice(item.start, item.end)));
+    const highlight = createFinding(item, value.slice(item.start, item.end));
+    fragment.append(highlight);
+    newHighlights.push(highlight);
     offset = item.end;
   }
   if (offset < value.length) fragment.append(document.createTextNode(value.slice(offset)));
   node.replaceWith(fragment);
-}
-
-function scanRules(): void {
-  if (!document.body) return;
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  const candidates: Text[] = [];
-  while (walker.nextNode() && candidates.length < 3500) {
-    const node = walker.currentNode as Text;
-    if (eligible(node)) candidates.push(node);
+  if (hideByDefault) {
+    for (const highlight of newHighlights) applyAutomaticMask(highlight);
   }
-  for (const node of candidates) wrapNode(node, detect(node.nodeValue || ''));
 }
 
-const observer = new MutationObserver(() => {
+function scanRules(root: Node = document.body ?? document.documentElement): void {
+  if (!root?.isConnected) return;
+  const candidates: Text[] = [];
+  if (root instanceof Text) {
+    candidates.push(root);
+  } else {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) candidates.push(walker.currentNode as Text);
+  }
+  for (const node of candidates) {
+    if (!node.isConnected || !eligible(node)) continue;
+    wrapNode(node, detect(node.nodeValue || '', finding => categoryEnabled(finding.type)));
+  }
+}
+
+const changedRoots = new Set<Node>();
+const observer = new MutationObserver(records => {
+  for (const record of records) {
+    if (record.type === 'characterData') changedRoots.add(record.target);
+    for (const node of Array.from(record.addedNodes)) changedRoots.add(node);
+  }
+  if (!changedRoots.size) return;
   clearTimeout(scanTimer);
   scanTimer = window.setTimeout(() => {
     observer.disconnect();
-    scanRules();
-    if (document.body) {
-      observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+    for (const root of changedRoots) scanRules(root);
+    changedRoots.clear();
+    if (document.documentElement) {
+      observer.observe(document.documentElement, { childList: true, characterData: true, subtree: true });
     }
   }, 250);
 });
 
-scanRules();
-if (document.body) {
-  observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+function refreshHighlights(): void {
+  observer.disconnect();
+  for (const span of Array.from(document.querySelectorAll<HTMLElement>('.pl-finding'))) {
+    const category = span.getAttribute('data-pl-category') as DetectionCategory | null;
+    if (category && !enabledCategories[category]) {
+      // Keep a mask the user applied, but remove automatically masked disabled findings.
+      if (isTextAltered(span) && !span.hasAttribute('data-pl-auto-mask')) continue;
+      spoiler.remove(span);
+      const original = originalText.get(span);
+      span.replaceWith(original?.cloneNode(true) ?? document.createTextNode(span.textContent || ''));
+    }
+  }
+  hint.classList.remove('show');
+  scanRules();
+  // Reconcile spans already on the page as well as the ones scanRules just made.
+  // This also handles an extension reload while the tab stays open.
+  syncAutomaticMasking();
+  if (document.documentElement) {
+    observer.observe(document.documentElement, { childList: true, characterData: true, subtree: true });
+  }
 }
 
+const settingsReady = chrome.storage.local.get([...categoryKeys.map(storageCategoryKey), 'defaultEffect', 'hideByDefault', 'showHoverTooltip'])
+  .then(settings => {
+    for (const category of categoryKeys) enabledCategories[category] = settings[storageCategoryKey(category)] !== false;
+    if (isEffect(settings.defaultEffect)) selectedEffect = settings.defaultEffect;
+    hideByDefault = settings.hideByDefault === true;
+    showHoverTooltip = settings.showHoverTooltip !== false;
+  })
+  .catch(error => console.warn('TekaSend: Could not load detection settings:', error))
+  .finally(refreshHighlights);
+
 function applyAction(target: Target, action: Action): void {
-  if (target.kind === 'image') {
-    const img = target.element;
-    if (!originalImages.has(img)) {
-      originalImages.set(img, {
-        src: img.getAttribute('src') || '',
-        srcset: img.getAttribute('srcset') || '',
-        alt: img.alt,
-        filter: img.style.filter
-      });
-    }
-    const old = originalImages.get(img)!;
-    if (action === 'restore') {
-      img.setAttribute('src', old.src);
-      if (old.srcset) img.setAttribute('srcset', old.srcset);
-      else img.removeAttribute('srcset');
-      img.alt = old.alt;
-      img.style.filter = old.filter;
-      return;
-    }
-    if (action === 'blur') {
-      img.style.filter = 'blur(14px)';
-      return;
-    }
-    const label = action === 'redact' ? 'REDACTED IMAGE' : 'Sample image';
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="360"><rect width="100%" height="100%" fill="${action === 'redact' ? '#151a27' : '#dce9f2'}"/><text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" fill="${action === 'redact' ? 'white' : '#28445c'}" font-family="Arial" font-size="27">${label}</text></svg>`;
-    img.removeAttribute('srcset');
-    img.src = `data:image/svg+xml,${encodeURIComponent(svg)}`;
-    img.alt = label;
-    img.style.filter = old.filter;
-    return;
-  }
-
-  if (target.kind === 'field') {
-    const field = target.element;
-    if (action === 'blur') {
-      field.style.filter = 'blur(5px)';
-      showNotice('Blur applies to the whole field. Click the field to edit it.', field.getBoundingClientRect());
-      return;
-    }
-    const { start, end } = target;
-    const rawTargetText = field.value.slice(start, end);
-
-    let replacement = '';
-    if (action === 'redact') {
-      replacement = '[REDACTED]';
-    } else if (action === 'placeholder') {
-      const findings = ruleMatcher.match(rawTargetText);
-      const repair = privacyReplacer.replace(rawTargetText, findings, [], 'semantic_placeholder');
-      replacement = repair.sanitizedText.length > 0 && repair.sanitizedText !== rawTargetText
-        ? repair.sanitizedText
-        : 'YOUR_SECRET_VALUE';
-    } else {
-      replacement = createDummyText(rawTargetText);
-    }
-
-    field.setRangeText(replacement, start, end, 'end');
-    field.dispatchEvent(new Event('input', { bubbles: true }));
-
-    // Run Pre-Flight Verification (PRD F3)
-    const verification = repairVerifier.verify(field.value, ruleMatcher.match(rawTargetText));
-    showNotice(
-      verification.isClean
-        ? 'Verified: Sensitive data removed. Safe to send.'
-        : 'Warning: Some sensitive data may still remain in field.',
-      field.getBoundingClientRect()
-    );
-    return;
-  }
-
-  let element: HTMLElement;
-  if (target.kind === 'selection') {
-    const range = target.range;
-    if (range.collapsed || !range.commonAncestorContainer.isConnected) return;
-    element = document.createElement('span');
-    element.className = 'pl-finding pl-manual';
-    element.setAttribute('data-pl-type', 'Manual selection');
-    const original = range.extractContents();
-    originalText.set(element, original.cloneNode(true) as DocumentFragment);
-    element.append(original);
-    range.insertNode(element);
-    pendingSelection = null;
-    getSelection()?.removeAllRanges();
-  } else {
-    element = target.element;
-  }
+  const element = target.element;
 
   const original = originalText.get(element);
-  if (action === 'removeHighlight') {
-    if (original) {
-      const restored = original.cloneNode(true) as DocumentFragment;
-      const walker = document.createTreeWalker(restored, NodeFilter.SHOW_TEXT);
-      while (walker.nextNode()) ignoredText.add(walker.currentNode as Text);
-      element.replaceWith(restored);
-    }
-    return;
-  }
   if (action === 'restore') {
-    if (original) element.replaceWith(original.cloneNode(true));
+    spoiler.remove(element);
+    element.classList.remove('pl-blur', 'pl-spoiler', 'pl-masked', 'pl-dummy');
+    element.removeAttribute('data-pl-auto-mask');
+    if (original) element.replaceChildren(original.cloneNode(true));
     return;
   }
   const sourceText = original?.textContent ?? element.textContent ?? '';
-  element.classList.remove('pl-blur', 'pl-masked', 'pl-dummy');
+  spoiler.remove(element);
+  element.classList.remove('pl-blur', 'pl-spoiler', 'pl-masked', 'pl-dummy');
   if (original) element.replaceChildren(original.cloneNode(true));
 
   if (action === 'blur') {
     element.classList.add('pl-blur');
+  } else if (action === 'spoiler') {
+    element.classList.add('pl-spoiler');
+    spoiler.add(element);
   } else if (action === 'placeholder') {
     element.classList.add('pl-masked');
     const type = element.getAttribute('data-pl-type') || 'text';
@@ -358,32 +315,29 @@ function applyAction(target: Target, action: Action): void {
   } else if (action === 'dummy') {
     element.classList.add('pl-dummy');
     element.textContent = createDummyText(sourceText);
-  } else {
-    element.classList.add('pl-masked');
-    element.textContent = `[REDACTED: ${element.getAttribute('data-pl-type') || 'text'}]`;
   }
 }
 
 document.addEventListener('click', event => {
+  if (event.button !== 0) return;
   const target = event.target;
   if (!(target instanceof Element) || target.closest('[data-privacy-lens-ui]')) return;
-
+  if (target instanceof HTMLImageElement) return;
   const finding = target.closest('.pl-finding');
   if (finding instanceof HTMLElement) {
     event.preventDefault();
     event.stopPropagation();
     hint.classList.remove('show');
-    showMenu({ kind: 'text', element: finding }, finding.getBoundingClientRect(), findingLabel(finding));
+    if (isTextAltered(finding)) {
+      applyAction({ kind: 'text', element: finding }, 'restore');
+    } else {
+      void settingsReady.then(() => {
+        if (finding.isConnected) applyAction({ kind: 'text', element: finding }, selectedEffect);
+      });
+    }
     return;
   }
-  if (target instanceof HTMLImageElement) {
-    event.preventDefault();
-    event.stopPropagation();
-    pendingImage = target;
-    showMenu({ kind: 'image', element: target }, target.getBoundingClientRect(), 'Image actions');
-    return;
-  }
-  hideMenu();
+  hint.classList.remove('show');
 }, true);
 
 function mapTypeToCategory(type: string): FindingCategory {
@@ -394,10 +348,16 @@ function mapTypeToCategory(type: string): FindingCategory {
   if (lower.includes('private')) return 'private_key';
   if (lower.includes('email')) return 'email';
   if (lower.includes('phone')) return 'phone';
+  if (lower.includes('name') && !lower.includes('username')) return 'person_name';
   return 'custom_sensitive';
 }
 
 function updateFindingHint(event: PointerEvent): void {
+  if (!showHoverTooltip) {
+    activeHintFinding = null;
+    hint.classList.remove('show');
+    return;
+  }
   const finding = event.target instanceof Element ? event.target.closest('.pl-finding') : null;
   if (!(finding instanceof HTMLElement)) {
     if (activeHintFinding) {
@@ -406,41 +366,22 @@ function updateFindingHint(event: PointerEvent): void {
     }
     return;
   }
-  if (panel.classList.contains('show')) return;
   if (finding === activeHintFinding && hint.classList.contains('show')) return;
   activeHintFinding = finding;
 
   const findingType = finding.getAttribute('data-pl-type') || 'Sensitive text';
-  if (finding.classList.contains('pl-manual')) {
-    hintCopy.textContent = 'Manually masked text. Click for actions.';
+  if (isTextAltered(finding)) {
+    hintCopy.textContent = 'Click to restore.';
   } else {
     const category = mapTypeToCategory(findingType);
     const risk = riskAnalyzer.analyzeRisk(category, finding.textContent || '', 'medium');
-    hintCopy.textContent = `${findingType}: ${risk.explanation} Click for actions.`;
+    hintCopy.textContent = `${findingType}: ${risk.explanation} Click to ${effectLabel(selectedEffect)}.`;
   }
   placeBubble(hint, finding.getBoundingClientRect());
 }
 
 document.addEventListener('pointerover', updateFindingHint, true);
 document.addEventListener('pointermove', updateFindingHint, true);
-
-function pointInsideSelection(range: Range, x: number, y: number): boolean {
-  return Array.from(range.getClientRects()).some(
-    rect => x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
-  );
-}
-
-document.addEventListener('pointermove', event => {
-  if (!pendingSelection || panel.classList.contains('show') || !pendingSelection.commonAncestorContainer.isConnected) return;
-  if (pointInsideSelection(pendingSelection, event.clientX, event.clientY)) {
-    showMenu({ kind: 'selection', range: pendingSelection.cloneRange() }, pendingSelection.getBoundingClientRect(), 'Selected text');
-  }
-}, true);
-
-document.addEventListener('pointerdown', event => {
-  if (event.target instanceof Element && event.target.closest('[data-privacy-lens-ui]')) return;
-  if (pendingSelection && !pointInsideSelection(pendingSelection, event.clientX, event.clientY)) pendingSelection = null;
-}, true);
 
 document.addEventListener('pointerout', event => {
   const finding = event.target instanceof Element ? event.target.closest('.pl-finding') : null;
@@ -450,43 +391,16 @@ document.addEventListener('pointerout', event => {
   }
 }, true);
 
-document.addEventListener('contextmenu', event => {
-  if (event.target instanceof HTMLImageElement) pendingImage = event.target;
-  const selection = getSelection();
-  if (selection && !selection.isCollapsed && selection.rangeCount) pendingSelection = selection.getRangeAt(0).cloneRange();
-}, true);
-
-document.addEventListener('mouseup', event => {
-  if (event.button !== 0) return;
-  const active = document.activeElement;
-  if ((active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) && active.selectionStart !== active.selectionEnd) {
-    showMenu(
-      { kind: 'field', element: active, start: active.selectionStart!, end: active.selectionEnd! },
-      active.getBoundingClientRect(),
-      'Selected field text'
-    );
-    return;
-  }
-  const selection = getSelection();
-  if (!selection || selection.isCollapsed || !selection.rangeCount || !selection.toString().trim()) {
-    pendingSelection = null;
-    return;
-  }
-  const range = selection.getRangeAt(0).cloneRange();
-  if (range.commonAncestorContainer.parentElement?.closest('[data-privacy-lens-ui]')) return;
-  pendingSelection = range.cloneRange();
-  hideMenu();
-});
-
 document.addEventListener('paste', event => {
   const field = event.target;
   if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
   const value = event.clipboardData?.getData('text/plain') || '';
   if (!value) return;
-  const matches = detect(value);
+  const matches = detect(value, finding => categoryEnabled(finding.type));
   if (matches.length) showNotice(`Sensitive paste: ${[...new Set(matches.map(item => item.type))].join(', ')}. Review before submitting.`, field.getBoundingClientRect());
-  void analyzeWithAi(value.slice(0, 5000)).then(ai => {
-    if (ai.length) showNotice(`AI also found: ${[...new Set(ai.map(item => item.type))].join(', ')}. Review before submitting.`, field.getBoundingClientRect());
+  void analyzeWithAi(value.slice(0, 5000)).then(({ findings, provider }) => {
+    const visible = findings.filter(item => categoryEnabled(item.type, item.category));
+    if (visible.length) showNotice(`${provider === 'cloud' ? 'Cloud fallback' : 'Local AI'} also found: ${[...new Set(visible.map(item => item.type))].join(', ')}. Review before submitting.`, field.getBoundingClientRect());
   });
 }, true);
 
@@ -495,56 +409,43 @@ document.addEventListener('input', event => {
   if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
   clearTimeout(fieldTimer);
   fieldTimer = window.setTimeout(() => {
-    if (field instanceof HTMLInputElement && field.type === 'password') {
+    if (field instanceof HTMLInputElement && field.type === 'password' && enabledCategories.password) {
       showNotice('Password field: keep this value private.', field.getBoundingClientRect());
       return;
     }
-    const matches = detect(field.value);
+    const matches = detect(field.value, finding => categoryEnabled(finding.type));
     if (matches.length) showNotice(`Sensitive field: ${[...new Set(matches.map(item => item.type))].join(', ')}.`, field.getBoundingClientRect());
   }, 250);
 }, true);
 
-document.addEventListener('focusin', event => {
-  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) event.target.style.filter = '';
-}, true);
+type AiFinding = { text: string; type: string; severity: 'high' | 'medium'; category?: FindingCategory };
+type AiAnalysis = { findings: AiFinding[]; provider?: 'local' | 'cloud' };
 
-async function analyzeWithAi(text: string): Promise<{ text: string; type: string; severity: 'high' | 'medium' }[]> {
+async function analyzeWithAi(text: string): Promise<AiAnalysis> {
   try {
     const response = await chrome.runtime.sendMessage({ kind: 'AI_ANALYZE', text });
     if (!response.ok) {
       aiError = response.error || 'AI request failed.';
       console.warn('TekaSend:', aiError);
-      return [];
+      return { findings: [] };
     }
     aiError = '';
-    return response.findings || [];
+    return { findings: response.findings || [], provider: response.provider };
   } catch {
     aiError = 'Could not reach the extension background worker.';
-    return [];
+    return { findings: [] };
   }
 }
 
-function categorizeFindingType(type: string): 'apiKey' | 'password' | 'personal' | 'financial' {
-  const lower = type.toLowerCase();
-  if (lower.includes('api') || lower.includes('token') || lower.includes('key') || lower.includes('secret') || lower.includes('bearer')) {
-    return 'apiKey';
-  }
-  if (lower.includes('pass') || lower.includes('pwd')) {
-    return 'password';
-  }
-  if (lower.includes('card') || lower.includes('credit') || lower.includes('ssn') || lower.includes('financial') || lower.includes('tax')) {
-    return 'financial';
-  }
-  return 'personal';
-}
-
-async function scanAi(force = false): Promise<{ ok: boolean; error?: string; breakdown?: { apiKey: number; password: number; personal: number; financial: number; total: number } }> {
+async function scanAi(force = false): Promise<{ ok: boolean; error?: string; provider?: 'local' | 'cloud'; breakdown?: { apiKey: number; password: number; personal: number; financial: number; total: number } }> {
+  await settingsReady;
   if (aiScanned && !force) return { ok: true };
   aiScanned = true;
   if (!document.body) return { ok: false, error: 'This page has no content to scan.' };
   const text = (document.body.innerText || '').slice(0, 5000);
-  const found = await analyzeWithAi(text);
+  const { findings, provider } = await analyzeWithAi(text);
   if (aiError) return { ok: false, error: aiError };
+  const found = findings.filter(item => categoryEnabled(item.type, item.category));
 
   const breakdown = {
     apiKey: 0,
@@ -555,11 +456,11 @@ async function scanAi(force = false): Promise<{ ok: boolean; error?: string; bre
   };
 
   for (const item of found) {
-    const cat = categorizeFindingType(item.type);
+    const cat = detectionCategory(item.type, item.category);
     breakdown[cat]++;
   }
 
-  if (!found.length) return { ok: true, breakdown };
+  if (!found.length) return { ok: true, breakdown, provider };
   observer.disconnect();
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   const nodes: Text[] = [];
@@ -569,7 +470,7 @@ async function scanAi(force = false): Promise<{ ok: boolean; error?: string; bre
   }
   for (const node of nodes) {
     const value = node.nodeValue || '';
-    const findings: Finding[] = [];
+    const findings: DisplayFinding[] = [];
     for (const item of found) {
       let index = value.indexOf(item.text);
       while (index >= 0) {
@@ -588,20 +489,11 @@ async function scanAi(force = false): Promise<{ ok: boolean; error?: string; bre
     }
     wrapNode(node, clean);
   }
-  observer.observe(document.body, { childList: true, characterData: true, subtree: true });
-  return { ok: true, breakdown };
+  observer.observe(document.documentElement, { childList: true, characterData: true, subtree: true });
+  return { ok: true, breakdown, provider };
 }
 
-chrome.runtime.onMessage.addListener((message: { kind?: string; action?: Action; source?: string }, _sender, respond) => {
-  if (message.kind === 'ACTION' && message.action) {
-    const target = message.source === 'image' && pendingImage
-      ? { kind: 'image' as const, element: pendingImage }
-      : pendingSelection
-      ? { kind: 'selection' as const, range: pendingSelection }
-      : null;
-    if (target) applyAction(target, message.action);
-    respond({ ok: !!target });
-  }
+chrome.runtime.onMessage.addListener((message: { kind?: string }, _sender, respond) => {
   if (message.kind === 'SCAN_AI') {
     void scanAi(true).then(respond);
     return true;
@@ -609,7 +501,32 @@ chrome.runtime.onMessage.addListener((message: { kind?: string; action?: Action;
 });
 
 chrome.storage.onChanged.addListener(changes => {
-  if (!changes.aiEnabled && !changes.apiKey) return;
+  if (changes.showHoverTooltip) {
+    showHoverTooltip = changes.showHoverTooltip.newValue !== false;
+    if (!showHoverTooltip) {
+      activeHintFinding = null;
+      hint.classList.remove('show');
+    }
+  }
+  const effectChanged = !!changes.defaultEffect && isEffect(changes.defaultEffect.newValue);
+  if (effectChanged) {
+    selectedEffect = changes.defaultEffect.newValue;
+    activeHintFinding = null;
+    hint.classList.remove('show');
+  }
+  if (changes.hideByDefault) hideByDefault = changes.hideByDefault.newValue === true;
+  const categoriesChanged = categoryKeys.some(category => storageCategoryKey(category) in changes);
+  if (categoriesChanged) {
+    for (const category of categoryKeys) {
+      const change = changes[storageCategoryKey(category)];
+      if (change) enabledCategories[category] = change.newValue !== false;
+    }
+    refreshHighlights();
+  }
+  if (changes.hideByDefault || (effectChanged && hideByDefault)) {
+    syncAutomaticMasking(effectChanged, !!changes.hideByDefault);
+  }
+  if (!categoriesChanged && !changes.cloudEnabled && !changes.apiKey) return;
   clearTimeout(aiSettingsTimer);
   aiSettingsTimer = window.setTimeout(() => void scanAi(true), 350);
 });

@@ -11,6 +11,7 @@ import {
   FindingSeverity,
   SensitiveFinding
 } from '../types.js';
+import { findNames } from '../../name-detect.js';
 
 interface PatternDefinition {
   readonly category: FindingCategory;
@@ -133,6 +134,21 @@ export class DeterministicRuleMatcher {
           suggestedReplacement: rule.defaultReplacement
         });
       }
+    }
+
+    for (const name of findNames(text)) {
+      matchedFindings.push({
+        id: `rule_person_name_${name.start}_${name.end}`,
+        label: 'Personal Name',
+        category: 'person_name',
+        rawText: name.text,
+        start: name.start,
+        end: name.end,
+        severity: 'medium',
+        source: 'regex_rule',
+        confidence: 0.8,
+        suggestedReplacement: '[PERSON_NAME]'
+      });
     }
 
     return this.deduplicateAndSort(matchedFindings);

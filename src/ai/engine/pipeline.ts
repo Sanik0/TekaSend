@@ -9,9 +9,20 @@
 import { pipeline, env } from '@huggingface/transformers';
 import { ModelLifecycleState, ModelProgressPayload, ModelStatus } from '../types.js';
 
-// Configure transformers.js environment for browser extension compatibility
-if (typeof window !== 'undefined' || typeof self !== 'undefined') {
+// All executable ONNX assets and model files are packaged with the extension.
+// The browser never fetches remote executable code or model weights.
+if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
   env.allowLocalModels = true;
+  env.allowRemoteModels = false;
+  env.localModelPath = chrome.runtime.getURL('models/');
+  env.useWasmCache = false;
+  const wasm = env.backends.onnx.wasm;
+  if (!wasm) throw new Error('ONNX WebAssembly backend is unavailable.');
+  wasm.numThreads = 1;
+  wasm.wasmPaths = {
+    mjs: chrome.runtime.getURL('ort/ort-wasm-simd-threaded.asyncify.mjs'),
+    wasm: chrome.runtime.getURL('ort/ort-wasm-simd-threaded.asyncify.wasm')
+  };
 }
 
 export type ProgressCallback = (payload: ModelProgressPayload) => void;
@@ -86,7 +97,16 @@ export class ModelPipelineManager {
 
     this.initializationPromise = (async () => {
       try {
+        if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
+          const modelConfig = chrome.runtime.getURL(`models/${this.modelId}/config.json`);
+          const response = await fetch(modelConfig);
+          if (!response.ok) {
+            throw new Error('Local model files are missing. Run npm.cmd run model:download, then npm.cmd run build and reload the extension.');
+          }
+        }
         const pipe = await pipeline('token-classification', this.modelId, {
+          device: 'wasm',
+          dtype: 'q8',
           progress_callback: (progressData: unknown) => {
             const payload = progressData as ModelProgressPayload;
             if (typeof payload?.progress === 'number') {
