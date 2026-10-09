@@ -1,12 +1,163 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TekaSend demo</title>
-<style>
-  :root{font-family:system-ui;color:#18243b;background:#edf2f8}body{max-width:900px;margin:40px auto;padding:0 20px}header{margin-bottom:24px}h1{margin-bottom:4px}.muted{color:#66748c}main{display:grid;grid-template-columns:1fr 1fr;gap:16px}.card{background:white;padding:20px;border-radius:14px;box-shadow:0 5px 24px #12234112}h2{font-size:17px;margin-top:0}p{line-height:1.6}.tag{background:#edf1f8;padding:2px 5px;border-radius:4px}textarea,input{box-sizing:border-box;width:100%;font:14px system-ui;padding:10px;border:1px solid #bbc7d8;border-radius:7px;margin:5px 0 12px}textarea{height:100px}img{width:100%;border-radius:10px}button{background:#29437f;color:white;border:0;padding:9px 13px;border-radius:7px;cursor:pointer}@media(max-width:700px){main{grid-template-columns:1fr}}
-</style></head><body>
-<header><h1>TekaSend test page</h1><p class="muted">All values here are fictional and invalid. Use this page to test highlighting, manual masking, images, and paste warnings.</p></header>
-<main>
-  <section class="card"><h2>Visible text</h2><p>Contact our sample team at <strong>alex@example.com</strong>. The backup contact is <strong>sam@demo.test</strong>.</p><p>Sample password: <span>password = DemoPass123!</span></p><p>Sample API key: <span>sk-proj-FAKEEXAMPLEKEY1234567890</span></p><p>Sample phone: <span>0917 555 0123</span></p><p>This ordinary sentence should stay unchanged.</p></section>
-  <section class="card"><h2>Paste and type</h2><label for="message">Message</label><textarea id="message" placeholder="Paste alex@example.com or password = DemoPass123! here"></textarea><label for="email">Email field</label><input id="email" type="text" placeholder="Type a sample email"><label for="password">Password field</label><input id="password" type="password" placeholder="Type a fake password only"></section>
-  <section class="card"><h2>Manual masking</h2><p>Select this sentence with your mouse to show Blur, Dummy text, and Redact actions. It has no automatic match.</p><p><button id="add">Add a new sample line</button></p><div id="dynamic"></div></section>
-  <section class="card"><h2>Image actions</h2><p>Left click the image to open masking options.</p><img alt="Fictional document illustration" src="sample-document.svg"></section>
-</main><script>document.querySelector('#add').addEventListener('click',()=>{const p=document.createElement('p');p.textContent='New sample contact: casey@example.com';document.querySelector('#dynamic').append(p)})</script></body></html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>TekaSend demo</title>
+    <style>
+      :root {
+        font-family: system-ui;
+        color: #18243b;
+        background: #edf2f8;
+      }
+      body {
+        max-width: 900px;
+        margin: 40px auto;
+        padding: 0 20px;
+      }
+      header {
+        margin-bottom: 24px;
+      }
+      h1 {
+        margin-bottom: 4px;
+      }
+      .muted {
+        color: #66748c;
+      }
+      main {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .card {
+        background: white;
+        padding: 20px;
+        border-radius: 14px;
+        box-shadow: 0 5px 24px #12234112;
+      }
+      h2 {
+        font-size: 17px;
+        margin-top: 0;
+      }
+      p {
+        line-height: 1.6;
+      }
+      .tag {
+        background: #edf1f8;
+        padding: 2px 5px;
+        border-radius: 4px;
+      }
+      textarea,
+      input {
+        box-sizing: border-box;
+        width: 100%;
+        font: 14px system-ui;
+        padding: 10px;
+        border: 1px solid #bbc7d8;
+        border-radius: 7px;
+        margin: 5px 0 12px;
+      }
+      textarea {
+        height: 100px;
+      }
+      img {
+        width: 100%;
+        border-radius: 10px;
+      }
+      button {
+        background: #29437f;
+        color: white;
+        border: 0;
+        padding: 9px 13px;
+        border-radius: 7px;
+        cursor: pointer;
+      }
+      @media (max-width: 700px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>TekaSend test page</h1>
+      <p class="muted">
+        All values here are fictional and invalid. Use this page to test
+        highlighting, manual masking, images, and paste warnings.
+      </p>
+    </header>
+    <main>
+      <section class="card">
+        <h2>Visible text</h2>
+        <p>
+          Contact our sample team at <strong>alex@example.com</strong>. The
+          backup contact is <strong>sam@demo.test</strong>.
+        </p>
+        <p>Sample password: <span>password = DemoPass123!</span></p>
+        <p>Sample API key: <span>sk-proj-FAKEEXAMPLEKEY1234567890</span></p>
+        <p>Sample phone: <span>0917 555 0123</span></p>
+        <p>This ordinary sentence should stay unchanged.</p>
+      </section>
+      <section class="card">
+        <h2>Paste and type</h2>
+        <label for="message">Textarea Field</label
+        ><textarea
+          id="message"
+          placeholder="Paste alex@example.com or password = DemoPass123! here"
+        ></textarea
+        ><label for="email">Input Field</label
+        ><input
+          id="email"
+          type="text"
+          placeholder="Type a sample email"
+        /><label>AI Chatbot Prompt Box (ContentEditable)</label>
+        <div
+          contenteditable="true"
+          style="
+            min-height: 70px;
+            padding: 10px;
+            border: 1px solid #bbc7d8;
+            border-radius: 7px;
+            background: #fff;
+            margin: 5px 0 12px;
+            font: 14px system-ui;
+          "
+          placeholder="Type multi-paragraph prompt here..."
+        >
+          <p>
+            Prompt sample: check sk-proj-1234567890abcdef123456 with email
+            sarah@domain.com
+          </p>
+        </div>
+        <label for="password">Password field (ignored)</label
+        ><input
+          id="password"
+          type="password"
+          placeholder="Type a fake password only"
+        />
+      </section>
+      <section class="card">
+        <h2>Manual masking</h2>
+        <p>
+          Select this sentence with your mouse to show Blur, Dummy text, and
+          Redact actions. It has no automatic match.
+        </p>
+        <p><button id="add">Add a new sample line</button></p>
+        <div id="dynamic"></div>
+      </section>
+      <section class="card">
+        <h2>Image actions</h2>
+        <p>Left click the image to open masking options.</p>
+        <img alt="Fictional document illustration" src="sample-document.svg" />
+      </section>
+    </main>
+    <script>
+      document.querySelector("#add").addEventListener("click", () => {
+        const p = document.createElement("p");
+        p.textContent = "New sample contact: casey@example.com";
+        document.querySelector("#dynamic").append(p);
+      });
+    </script>
+  </body>
+</html>

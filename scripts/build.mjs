@@ -16,6 +16,7 @@ const options = {
   format: 'iife',
   target: 'chrome138',
   sourcemap: true,
+  external: ['@huggingface/transformers'],
   logLevel: 'info'
 };
 if (watching) {

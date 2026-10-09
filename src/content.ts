@@ -1,23 +1,66 @@
-import { detect, type Finding } from './detect';
-import { createDummyText } from './dummy';
+import { detect, type Finding } from "./detect";
+import { createDummyText } from "./dummy";
+import { DeterministicRuleMatcher } from "./ai/detectors/regex-rules.js";
+import { PrivacyReplacer } from "./ai/repair/replacer.js";
+import { LocalRepairVerifier } from "./ai/verifier/verify.js";
+import { RiskAnalyzer } from "./ai/reasoning/risk-analyzer.js";
 import {
-  DeterministicRuleMatcher,
-  PrivacyReplacer,
-  LocalRepairVerifier,
-  RiskAnalyzer,
-  FindingCategory
-} from './ai/index.js';
+  FindingCategory,
+  SensitiveFinding,
+  RepairStrategyType,
+} from "./ai/types.js";
+import {
+  InputObserver,
+  FieldChangeEvent,
+} from "./content/observer/input-observer.js";
+import {
+  InputIndicatorOverlay,
+  ProtectedItem,
+} from "./content/overlay/input-indicator.js";
+import { InputHighlighter } from "./content/overlay/input-highlighter.js";
 
-type Action = 'blur' | 'placeholder' | 'dummy' | 'redact' | 'restore' | 'removeHighlight';
+// Session storage for protected items per input field
+const elementProtectedMap = new WeakMap<HTMLElement, ProtectedItem[]>();
+
+function getProtectedItems(element: HTMLElement): ProtectedItem[] {
+  return elementProtectedMap.get(element) || [];
+}
+
+function setProtectedItems(element: HTMLElement, items: ProtectedItem[]): void {
+  elementProtectedMap.set(element, items);
+}
+
+function addOrUpdateProtectedItem(element: HTMLElement, item: ProtectedItem): void {
+  const current = getProtectedItems(element).filter(
+    (p) => p.id !== item.id && p.originalRawText !== item.originalRawText
+  );
+  current.push(item);
+  elementProtectedMap.set(element, current);
+}
+
+function removeProtectedItem(element: HTMLElement, itemId: string): void {
+  const current = getProtectedItems(element).filter((p) => p.id !== itemId);
+  elementProtectedMap.set(element, current);
+}
+
+type Action =
+  | "blur"
+  | "placeholder"
+  | "dummy"
+  | "redact"
+  | "restore"
+  | "removeHighlight";
 type Target =
-  | { kind: 'text'; element: HTMLElement }
-  | { kind: 'image'; element: HTMLImageElement }
-  | { kind: 'selection'; range: Range }
-  | { kind: 'field'; element: HTMLInputElement | HTMLTextAreaElement; start: number; end: number };
+  | { kind: "text"; element: HTMLElement }
+  | { kind: "image"; element: HTMLImageElement }
+  | { kind: "selection"; range: Range };
 
 const originalText = new WeakMap<HTMLElement, DocumentFragment>();
 const ignoredText = new WeakSet<Text>();
-const originalImages = new WeakMap<HTMLImageElement, { src: string; srcset: string; alt: string; filter: string }>();
+const originalImages = new WeakMap<
+  HTMLImageElement,
+  { src: string; srcset: string; alt: string; filter: string }
+>();
 
 const ruleMatcher = new DeterministicRuleMatcher();
 const privacyReplacer = new PrivacyReplacer();
@@ -30,10 +73,10 @@ let pendingImage: HTMLImageElement | null = null;
 let scanTimer = 0;
 let fieldTimer = 0;
 let aiScanned = false;
-let aiError = '';
+let aiError = "";
 let aiSettingsTimer = 0;
 
-const style = document.createElement('style');
+const style = document.createElement("style");
 style.textContent = `
   .pl-finding { cursor:pointer!important; border:none!important; border-radius:0!important; box-shadow:none!important; box-decoration-break:clone!important; -webkit-box-decoration-break:clone!important; }
   .pl-finding.pl-high { background:#ffd8dc!important; color:#4a1b24!important; }
@@ -45,13 +88,14 @@ style.textContent = `
 `;
 (document.head || document.documentElement).append(style);
 
-const host = document.createElement('div');
-host.setAttribute('data-privacy-lens-ui', '');
-host.style.cssText = 'position:fixed;z-index:2147483647;inset:0;pointer-events:none';
+const host = document.createElement("div");
+host.setAttribute("data-privacy-lens-ui", "");
+host.style.cssText =
+  "position:fixed;z-index:2147483647;inset:0;pointer-events:none";
 document.documentElement.append(host);
-const shadow = host.attachShadow({ mode: 'closed' });
+const shadow = host.attachShadow({ mode: "closed" });
 
-const uiStyle = document.createElement('style');
+const uiStyle = document.createElement("style");
 uiStyle.textContent = `
   * { box-sizing:border-box; }
   .bubble { position:fixed; width:min(320px, calc(100vw - 16px)); padding:19px 21px 20px; background:#3d3a48; color:#f8f7fb; border-radius:17px; box-shadow:0 10px 26px #24212e3d; font:13px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; visibility:hidden; opacity:0; transform:translateY(var(--enter-y, 6px)) scale(.98); transition:opacity 160ms ease,transform 220ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 220ms; pointer-events:none; }
@@ -74,91 +118,581 @@ uiStyle.textContent = `
 `;
 shadow.append(uiStyle);
 
-const panel = document.createElement('div');
-panel.className = 'bubble panel';
-panel.setAttribute('role', 'dialog');
-panel.setAttribute('aria-label', 'TekaSend actions');
-const panelBrand = document.createElement('div');
-panelBrand.className = 'brand';
-const panelIcon = document.createElement('span');
-panelIcon.className = 'brand-icon';
-panelIcon.textContent = 'i';
-panelBrand.append(panelIcon, document.createTextNode('TekaSend'));
-const title = document.createElement('div');
-title.className = 'copy';
-const buttons = document.createElement('div');
-buttons.className = 'buttons';
+const panel = document.createElement("div");
+panel.className = "bubble panel";
+panel.setAttribute("role", "dialog");
+panel.setAttribute("aria-label", "TekaSend actions");
+const panelBrand = document.createElement("div");
+panelBrand.className = "brand";
+const panelIcon = document.createElement("span");
+panelIcon.className = "brand-icon";
+panelIcon.textContent = "i";
+panelBrand.append(panelIcon, document.createTextNode("TekaSend"));
+const title = document.createElement("div");
+title.className = "copy";
+const buttons = document.createElement("div");
+buttons.className = "buttons";
 panel.append(panelBrand, title, buttons);
 shadow.append(panel);
 
-const notice = document.createElement('div');
-notice.className = 'bubble notice';
-notice.setAttribute('role', 'status');
+const notice = document.createElement("div");
+notice.className = "bubble notice";
+notice.setAttribute("role", "status");
 const noticeBrand = panelBrand.cloneNode(true);
-const noticeCopy = document.createElement('div');
-noticeCopy.className = 'copy';
+const noticeCopy = document.createElement("div");
+noticeCopy.className = "copy";
 notice.append(noticeBrand, noticeCopy);
 shadow.append(notice);
 
-const hint = document.createElement('div');
-hint.className = 'bubble hint';
-hint.setAttribute('role', 'tooltip');
-const hintCopy = document.createElement('div');
-hintCopy.className = 'copy';
+const hint = document.createElement("div");
+hint.className = "bubble hint";
+hint.setAttribute("role", "tooltip");
+const hintCopy = document.createElement("div");
+hintCopy.className = "copy";
 hint.append(panelBrand.cloneNode(true), hintCopy);
 shadow.append(hint);
+
+function applyFieldRepair(
+  element: HTMLElement,
+  finding: SensitiveFinding,
+  strategy: RepairStrategyType,
+): void {
+  const currentText = inputObserver.extractFieldText(element);
+  if (!currentText) return;
+
+  // 1. Get all currently detected findings across the full input text
+  const allCurrentFindings = ruleMatcher.match(currentText);
+  // 2. Get existing protected items for this element
+  const protectedList = getProtectedItems(element);
+
+  // 3. Find all occurrences matching finding.rawText so all instances of the same entity are sanitized consistently
+  const targetOccurrences = allCurrentFindings.filter(
+    (f) => f.rawText === finding.rawText,
+  );
+  const targetFindings =
+    targetOccurrences.length > 0 ? targetOccurrences : [finding];
+
+  // 4. Run replacer with full context of active findings & existing protected items
+  const repair = privacyReplacer.replace(
+    currentText,
+    targetFindings,
+    targetFindings.map((f) => ({ findingId: f.id, strategy })),
+    strategy,
+    protectedList,
+    allCurrentFindings,
+  );
+
+  const sanitizedText = repair.sanitizedText;
+  inputObserver.setFieldText(element, sanitizedText);
+
+  // 5. Get the actual assigned replacement token from the replacementMap
+  const replacementToken =
+    repair.replacementMap.get(finding.rawText) ||
+    privacyReplacer.generateReplacement(finding, strategy, 0);
+
+  const assignedEntityIndex =
+    repair.rawToEntityIndexMap?.get(finding.rawText) ?? 1;
+
+  addOrUpdateProtectedItem(element, {
+    id: finding.id,
+    category: finding.category,
+    label: finding.label,
+    originalRawText: finding.rawText,
+    currentToken: replacementToken,
+    currentStrategy: strategy,
+    entityIndex: assignedEntityIndex,
+  });
+
+  // Also update any other protected items that were upgraded (e.g. from [EMAIL_ADDRESS] to [EMAIL_ADDRESS_1])
+  for (const item of protectedList) {
+    if (repair.replacementMap.has(item.originalRawText)) {
+      const updatedToken = repair.replacementMap.get(item.originalRawText)!;
+      const updatedIdx =
+        repair.rawToEntityIndexMap?.get(item.originalRawText) ??
+        item.entityIndex;
+      addOrUpdateProtectedItem(element, {
+        ...item,
+        currentToken: updatedToken,
+        entityIndex: updatedIdx,
+      });
+    }
+  }
+
+  // 6. Instant re-scan updated text and update in-field indicator and highlights
+  const newFindings = ruleMatcher.match(sanitizedText);
+  const bounds = element.getBoundingClientRect();
+  const updatedProtectedList = getProtectedItems(element);
+  inputIndicator.update(element, newFindings, bounds, updatedProtectedList);
+  inputHighlighter.update(element, newFindings);
+}
+
+// Initialize In-Field Sensitive Word Highlighter (Light iOS-Style Tint & Micro-Tooltip)
+const inputHighlighter = new InputHighlighter(
+  shadow,
+  (element, finding, strategy) => {
+    applyFieldRepair(element, finding, strategy);
+  },
+);
+
+// Initialize In-Field Privacy Indicator Overlay (PRD F1, F2, F3)
+const inputIndicator = new InputIndicatorOverlay(shadow, {
+  onApplyRepair: (element, finding, strategy) => {
+    applyFieldRepair(element, finding, strategy);
+  },
+  onApplyRepairAll: (element, strategy) => {
+    const currentText = inputObserver.extractFieldText(element);
+    if (!currentText) return;
+
+    const findings = ruleMatcher.match(currentText);
+    const protectedList = getProtectedItems(element);
+    const repair = privacyReplacer.replace(
+      currentText,
+      findings,
+      [],
+      strategy,
+      protectedList,
+      findings,
+    );
+    const sanitizedText = repair.sanitizedText;
+
+    inputObserver.setFieldText(element, sanitizedText);
+
+    for (const finding of findings) {
+      const replacementToken =
+        repair.replacementMap.get(finding.rawText) ||
+        privacyReplacer.generateReplacement(finding, strategy, 0);
+
+      const assignedEntityIndex =
+        repair.rawToEntityIndexMap?.get(finding.rawText) ?? 1;
+
+      addOrUpdateProtectedItem(element, {
+        id: finding.id,
+        category: finding.category,
+        label: finding.label,
+        originalRawText: finding.rawText,
+        currentToken: replacementToken,
+        currentStrategy: strategy,
+        entityIndex: assignedEntityIndex,
+      });
+    }
+
+    const newFindings = ruleMatcher.match(sanitizedText);
+    const bounds = element.getBoundingClientRect();
+    const updatedProtectedList = getProtectedItems(element);
+    inputIndicator.update(element, newFindings, bounds, updatedProtectedList);
+    inputHighlighter.update(element, newFindings);
+  },
+  onSwitchStrategy: (element, item, newStrategy) => {
+    const currentText = inputObserver.extractFieldText(element);
+    if (!currentText) return;
+
+    const protectedList = getProtectedItems(element);
+    const activeFindings = ruleMatcher.match(currentText);
+    const distinctInCat = new Set<string>();
+    for (const p of protectedList) {
+      if (p.category === item.category) distinctInCat.add(p.originalRawText);
+    }
+    for (const f of activeFindings) {
+      if (f.category === item.category) distinctInCat.add(f.rawText);
+    }
+    const totalDistinct = distinctInCat.size;
+    const entityIndex = totalDistinct > 1 ? (item.entityIndex || 1) : 0;
+
+    const dummyFinding = {
+      id: item.id,
+      label: item.label,
+      category: item.category,
+      rawText: item.originalRawText,
+      start: 0,
+      end: item.originalRawText.length,
+      severity: "critical" as const,
+      source: "regex_rule" as const,
+      confidence: 1.0,
+      suggestedReplacement: `YOUR_${item.category.toUpperCase()}`,
+    };
+
+    const newToken = privacyReplacer.generateReplacement(
+      dummyFinding,
+      newStrategy,
+      entityIndex,
+    );
+
+    const updatedText = currentText.includes(item.currentToken)
+      ? currentText.split(item.currentToken).join(newToken)
+      : currentText;
+
+    inputObserver.setFieldText(element, updatedText);
+
+    addOrUpdateProtectedItem(element, {
+      ...item,
+      currentToken: newToken,
+      currentStrategy: newStrategy,
+      entityIndex: item.entityIndex ?? (totalDistinct > 1 ? entityIndex : 1),
+    });
+
+    const newFindings = ruleMatcher.match(updatedText);
+    const bounds = element.getBoundingClientRect();
+    const updatedList = getProtectedItems(element);
+    inputIndicator.update(element, newFindings, bounds, updatedList);
+    inputHighlighter.update(element, newFindings);
+  },
+  onRestoreOriginal: (element, item) => {
+    const currentText = inputObserver.extractFieldText(element);
+    if (!currentText) return;
+
+    const restoredText = currentText.includes(item.currentToken)
+      ? currentText.split(item.currentToken).join(item.originalRawText)
+      : currentText;
+
+    inputObserver.setFieldText(element, restoredText);
+    removeProtectedItem(element, item.id);
+
+    const newFindings = ruleMatcher.match(restoredText);
+    const bounds = element.getBoundingClientRect();
+    const protectedList = getProtectedItems(element);
+    inputIndicator.update(element, newFindings, bounds, protectedList);
+    inputHighlighter.update(element, newFindings);
+  },
+  onSwitchAllStrategies: (element, newStrategy) => {
+    let currentText = inputObserver.extractFieldText(element);
+    if (!currentText) return;
+
+    const protectedList = getProtectedItems(element);
+    const activeFindings = ruleMatcher.match(currentText);
+
+    for (const item of protectedList) {
+      const distinctInCat = new Set<string>();
+      for (const p of protectedList) {
+        if (p.category === item.category) distinctInCat.add(p.originalRawText);
+      }
+      for (const f of activeFindings) {
+        if (f.category === item.category) distinctInCat.add(f.rawText);
+      }
+      const totalDistinct = distinctInCat.size;
+      const entityIndex = totalDistinct > 1 ? (item.entityIndex || 1) : 0;
+
+      const dummyFinding = {
+        id: item.id,
+        label: item.label,
+        category: item.category,
+        rawText: item.originalRawText,
+        start: 0,
+        end: item.originalRawText.length,
+        severity: "critical" as const,
+        source: "regex_rule" as const,
+        confidence: 1.0,
+        suggestedReplacement: `YOUR_${item.category.toUpperCase()}`,
+      };
+
+      const newToken = privacyReplacer.generateReplacement(
+        dummyFinding,
+        newStrategy,
+        entityIndex,
+      );
+
+      if (currentText.includes(item.currentToken)) {
+        currentText = currentText.split(item.currentToken).join(newToken);
+      }
+
+      addOrUpdateProtectedItem(element, {
+        ...item,
+        currentToken: newToken,
+        currentStrategy: newStrategy,
+        entityIndex: item.entityIndex ?? (totalDistinct > 1 ? entityIndex : 1),
+      });
+    }
+
+    inputObserver.setFieldText(element, currentText);
+
+    const newFindings = ruleMatcher.match(currentText);
+    const bounds = element.getBoundingClientRect();
+    const updatedList = getProtectedItems(element);
+    inputIndicator.update(element, newFindings, bounds, updatedList);
+    inputHighlighter.update(element, newFindings);
+  },
+  onRestoreAll: (element) => {
+    let currentText = inputObserver.extractFieldText(element);
+    if (!currentText) return;
+
+    const protectedList = getProtectedItems(element);
+    for (const item of protectedList) {
+      if (currentText.includes(item.currentToken)) {
+        currentText = currentText.split(item.currentToken).join(
+          item.originalRawText,
+        );
+      }
+    }
+
+    setProtectedItems(element, []);
+    inputObserver.setFieldText(element, currentText);
+
+    const newFindings = ruleMatcher.match(currentText);
+    const bounds = element.getBoundingClientRect();
+    inputIndicator.update(element, newFindings, bounds, []);
+    inputHighlighter.update(element, newFindings);
+  },
+});
+
+// Initialize Input Field Observer for AI chatbot prompts and forms
+const inputObserver = new InputObserver(
+  (event: FieldChangeEvent) => {
+    if (event.isPassword) {
+      inputIndicator.hide();
+      inputHighlighter.clear();
+      return;
+    }
+
+    // Instant deterministic rule scan (<0.1ms)
+    const findings = ruleMatcher.match(event.text);
+    const activeProtected = getProtectedItems(event.element).filter((p) =>
+      event.text.includes(p.currentToken),
+    );
+    setProtectedItems(event.element, activeProtected);
+
+    inputIndicator.update(
+      event.element,
+      findings,
+      event.bounds,
+      activeProtected,
+    );
+    inputHighlighter.update(event.element, findings);
+  },
+  () => {
+    // Only hide if the notice card is not currently open
+    if (!inputIndicator.getIsCardVisible()) {
+      inputIndicator.hide();
+      inputHighlighter.clear();
+    }
+  },
+);
+
+/**
+ * Instantly sanitizes all detected sensitive data in the active focused field via keyboard shortcut.
+ */
+function sanitizeActiveField(
+  strategy: RepairStrategyType = "semantic_placeholder",
+): boolean {
+  const activeElement = inputObserver.getActiveElement();
+  if (!activeElement || !activeElement.isConnected) return false;
+
+  const currentText = inputObserver.extractFieldText(activeElement);
+  if (!currentText) return false;
+
+  const findings = ruleMatcher.match(currentText);
+  const protectedList = getProtectedItems(activeElement);
+
+  if (findings.length === 0 && protectedList.length === 0) {
+    return false;
+  }
+
+  if (findings.length === 0 && protectedList.length > 0) {
+    // Switch existing protected items to the selected strategy
+    for (const item of protectedList) {
+      if (item.currentStrategy !== strategy) {
+        const distinctInCat = new Set<string>();
+        for (const p of protectedList) {
+          if (p.category === item.category) distinctInCat.add(p.originalRawText);
+        }
+        const totalDistinct = distinctInCat.size;
+        const entityIndex = totalDistinct > 1 ? (item.entityIndex || 1) : 0;
+
+        const dummyFinding: SensitiveFinding = {
+          id: item.id,
+          label: item.label,
+          category: item.category,
+          rawText: item.originalRawText,
+          start: 0,
+          end: item.originalRawText.length,
+          severity: "critical",
+          source: "regex_rule",
+          confidence: 1.0,
+          suggestedReplacement: `YOUR_${item.category.toUpperCase()}`,
+        };
+
+        const newToken = privacyReplacer.generateReplacement(
+          dummyFinding,
+          strategy,
+          entityIndex,
+        );
+        const liveText = inputObserver.extractFieldText(activeElement);
+        if (liveText.includes(item.currentToken)) {
+          const updatedText = liveText.split(item.currentToken).join(newToken);
+          inputObserver.setFieldText(activeElement, updatedText);
+        }
+
+        addOrUpdateProtectedItem(activeElement, {
+          ...item,
+          currentToken: newToken,
+          currentStrategy: strategy,
+          entityIndex: item.entityIndex ?? (totalDistinct > 1 ? entityIndex : 1),
+        });
+      }
+    }
+
+    const updatedText = inputObserver.extractFieldText(activeElement);
+    const newFindings = ruleMatcher.match(updatedText);
+    const bounds = activeElement.getBoundingClientRect();
+    const updatedList = getProtectedItems(activeElement);
+    inputIndicator.update(activeElement, newFindings, bounds, updatedList);
+    inputHighlighter.update(activeElement, newFindings);
+    return true;
+  }
+
+  // Replace all active findings with the requested strategy
+  const repair = privacyReplacer.replace(
+    currentText,
+    findings,
+    [],
+    strategy,
+    protectedList,
+    findings,
+  );
+  const sanitizedText = repair.sanitizedText;
+  inputObserver.setFieldText(activeElement, sanitizedText);
+
+  for (const finding of findings) {
+    const replacementToken =
+      repair.replacementMap.get(finding.rawText) ||
+      privacyReplacer.generateReplacement(finding, strategy, 0);
+
+    const assignedEntityIndex =
+      repair.rawToEntityIndexMap?.get(finding.rawText) ?? 1;
+
+    addOrUpdateProtectedItem(activeElement, {
+      id: finding.id,
+      category: finding.category,
+      label: finding.label,
+      originalRawText: finding.rawText,
+      currentToken: replacementToken,
+      currentStrategy: strategy,
+      entityIndex: assignedEntityIndex,
+    });
+  }
+
+  const newFindings = ruleMatcher.match(sanitizedText);
+  const bounds = activeElement.getBoundingClientRect();
+  const updatedProtectedList = getProtectedItems(activeElement);
+  inputIndicator.update(activeElement, newFindings, bounds, updatedProtectedList);
+  inputHighlighter.update(activeElement, newFindings);
+  return true;
+}
+
+// Global Keyboard Shortcut: Alt + P / Option + P or Cmd/Ctrl + Shift + P to sanitize active field
+document.addEventListener(
+  "keydown",
+  (event: KeyboardEvent) => {
+    const isAltP =
+      event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      (event.key === "p" || event.key === "P" || event.code === "KeyP");
+    const isCmdShiftP =
+      (event.metaKey || event.ctrlKey) &&
+      event.shiftKey &&
+      (event.key === "p" || event.key === "P" || event.code === "KeyP");
+    const isAltS =
+      event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      (event.key === "s" || event.key === "S" || event.code === "KeyS");
+
+    if (isAltP || isCmdShiftP) {
+      const handled = sanitizeActiveField("semantic_placeholder");
+      if (handled) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    } else if (isAltS) {
+      const handled = sanitizeActiveField("synthetic_dummy");
+      if (handled) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }
+  },
+  true,
+);
 
 let activeHintFinding: HTMLElement | null = null;
 let noticeTimeout = 0;
 
 function placeBubble(element: HTMLElement, rect: DOMRect): void {
-  element.classList.add('show');
+  element.classList.add("show");
   const width = element.offsetWidth;
   const height = element.offsetHeight;
   const center = rect.left + rect.width / 2;
-  const left = Math.max(8, Math.min(center - width / 2, window.innerWidth - width - 8));
-  const above = rect.top - height - 18 >= 8 || rect.bottom + height + 18 > window.innerHeight - 8;
-  const top = above ? Math.max(8, rect.top - height - 18) : Math.max(8, Math.min(rect.bottom + 18, window.innerHeight - height - 8));
-  element.classList.toggle('below', !above);
+  const left = Math.max(
+    8,
+    Math.min(center - width / 2, window.innerWidth - width - 8),
+  );
+  const above =
+    rect.top - height - 18 >= 8 ||
+    rect.bottom + height + 18 > window.innerHeight - 8;
+  const top = above
+    ? Math.max(8, rect.top - height - 18)
+    : Math.max(8, Math.min(rect.bottom + 18, window.innerHeight - height - 8));
+  element.classList.toggle("below", !above);
   element.style.left = `${left}px`;
   element.style.top = `${top}px`;
-  element.style.setProperty('--pointer-x', `${Math.max(22, Math.min(width - 22, center - left))}px`);
+  element.style.setProperty(
+    "--pointer-x",
+    `${Math.max(22, Math.min(width - 22, center - left))}px`,
+  );
 }
 
 function showNotice(message: string, rect: DOMRect): void {
   noticeCopy.textContent = message;
   placeBubble(notice, rect);
   clearTimeout(noticeTimeout);
-  noticeTimeout = window.setTimeout(() => notice.classList.remove('show'), 6500);
+  noticeTimeout = window.setTimeout(
+    () => notice.classList.remove("show"),
+    6500,
+  );
 }
 
 function showMenu(target: Target, rect: DOMRect, label: string): void {
   currentTarget = target;
   activeHintFinding = null;
-  hint.classList.remove('show');
-  title.textContent = label.replace(/ · click for actions$/, '');
+  hint.classList.remove("show");
+  title.textContent = label.replace(/ · click for actions$/, "");
   buttons.replaceChildren();
 
-  const actions: Action[] = target.kind === 'selection' || target.kind === 'field'
-    ? ['placeholder', 'dummy', 'redact', 'blur']
-    : target.kind === 'text' && !target.element.classList.contains('pl-manual')
-      ? ['placeholder', 'dummy', 'redact', 'blur', 'removeHighlight']
-      : ['placeholder', 'dummy', 'redact', 'blur', 'restore'];
+  const actions: Action[] =
+    target.kind === "image"
+      ? ["blur", "redact", "restore"]
+      : target.kind === "selection"
+        ? ["blur", "redact", "placeholder", "dummy"]
+        : target.kind === "text" &&
+            !target.element.classList.contains("pl-manual")
+          ? ["blur", "redact", "placeholder", "dummy", "removeHighlight"]
+          : ["blur", "redact", "placeholder", "dummy", "restore"];
 
   for (const action of actions) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    let buttonText = '';
+    const button = document.createElement("button");
+    button.type = "button";
+    let buttonText = "";
     switch (action) {
-      case 'placeholder': buttonText = 'Placeholder'; break;
-      case 'dummy': buttonText = 'Dummy text'; break;
-      case 'redact': buttonText = 'Redact'; break;
-      case 'blur': buttonText = 'Blur'; break;
-      case 'restore': buttonText = 'Restore'; break;
-      case 'removeHighlight': buttonText = 'Remove highlight'; break;
+      case "blur":
+        buttonText = "Blur";
+        break;
+      case "redact":
+        buttonText = "Mask / Redact";
+        break;
+      case "placeholder":
+        buttonText = "Placeholder";
+        break;
+      case "dummy":
+        buttonText = "Scramble";
+        break;
+      case "restore":
+        buttonText = "Restore";
+        break;
+      case "removeHighlight":
+        buttonText = "Remove";
+        break;
     }
     button.textContent = buttonText;
-    button.addEventListener('click', () => {
+    button.addEventListener("click", () => {
       if (currentTarget) {
         applyAction(currentTarget, action);
       }
@@ -170,20 +704,25 @@ function showMenu(target: Target, rect: DOMRect, label: string): void {
 }
 
 function hideMenu(): void {
-  panel.classList.remove('show');
+  panel.classList.remove("show");
   currentTarget = null;
 }
 
 function findingLabel(element: HTMLElement): string {
-  if (element.classList.contains('pl-manual')) return 'Manually masked text';
-  const level = element.classList.contains('pl-medium') ? 'Personal information' : 'Confidential information';
-  return `${level}: ${element.getAttribute('data-pl-type') || 'text'}`;
+  if (element.classList.contains("pl-manual")) return "Manually masked text";
+  const level = element.classList.contains("pl-medium")
+    ? "Personal information"
+    : "Confidential information";
+  return `${level}: ${element.getAttribute("data-pl-type") || "text"}`;
 }
 
-function createFinding(finding: Pick<Finding, 'type' | 'severity'>, text: string): HTMLElement {
-  const span = document.createElement('span');
+function createFinding(
+  finding: Pick<Finding, "type" | "severity">,
+  text: string,
+): HTMLElement {
+  const span = document.createElement("span");
   span.className = `pl-finding pl-${finding.severity}`;
-  span.setAttribute('data-pl-type', finding.type);
+  span.setAttribute("data-pl-type", finding.type);
   span.textContent = text;
   const fragment = document.createDocumentFragment();
   fragment.append(document.createTextNode(text));
@@ -197,23 +736,27 @@ function eligible(node: Text): boolean {
     !!parent &&
     !ignoredText.has(node) &&
     !!node.nodeValue?.trim() &&
-    !parent.closest('script,style,noscript,textarea,input,select,option,code,pre,[contenteditable],.pl-finding,[data-privacy-lens-ui]') &&
-    getComputedStyle(parent).display !== 'none'
+    !parent.closest(
+      "script,style,noscript,textarea,input,select,option,code,pre,[contenteditable],.pl-finding,[data-privacy-lens-ui]",
+    ) &&
+    getComputedStyle(parent).display !== "none"
   );
 }
 
 function wrapNode(node: Text, findings: Finding[]): void {
-  const value = node.nodeValue || '';
+  const value = node.nodeValue || "";
   if (!findings.length || !node.parentNode) return;
   const fragment = document.createDocumentFragment();
   let offset = 0;
   for (const item of findings) {
     if (item.start < offset || item.end > value.length) continue;
-    if (item.start > offset) fragment.append(document.createTextNode(value.slice(offset, item.start)));
+    if (item.start > offset)
+      fragment.append(document.createTextNode(value.slice(offset, item.start)));
     fragment.append(createFinding(item, value.slice(item.start, item.end)));
     offset = item.end;
   }
-  if (offset < value.length) fragment.append(document.createTextNode(value.slice(offset)));
+  if (offset < value.length)
+    fragment.append(document.createTextNode(value.slice(offset)));
   node.replaceWith(fragment);
 }
 
@@ -225,7 +768,7 @@ function scanRules(): void {
     const node = walker.currentNode as Text;
     if (eligible(node)) candidates.push(node);
   }
-  for (const node of candidates) wrapNode(node, detect(node.nodeValue || ''));
+  for (const node of candidates) wrapNode(node, detect(node.nodeValue || ""));
 }
 
 const observer = new MutationObserver(() => {
@@ -234,93 +777,64 @@ const observer = new MutationObserver(() => {
     observer.disconnect();
     scanRules();
     if (document.body) {
-      observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+      observer.observe(document.body, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
     }
   }, 250);
 });
 
 scanRules();
 if (document.body) {
-  observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+  observer.observe(document.body, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
 }
 
 function applyAction(target: Target, action: Action): void {
-  if (target.kind === 'image') {
+  if (target.kind === "image") {
     const img = target.element;
     if (!originalImages.has(img)) {
       originalImages.set(img, {
-        src: img.getAttribute('src') || '',
-        srcset: img.getAttribute('srcset') || '',
+        src: img.getAttribute("src") || "",
+        srcset: img.getAttribute("srcset") || "",
         alt: img.alt,
-        filter: img.style.filter
+        filter: img.style.filter,
       });
     }
     const old = originalImages.get(img)!;
-    if (action === 'restore') {
-      img.setAttribute('src', old.src);
-      if (old.srcset) img.setAttribute('srcset', old.srcset);
-      else img.removeAttribute('srcset');
+    if (action === "restore") {
+      img.setAttribute("src", old.src);
+      if (old.srcset) img.setAttribute("srcset", old.srcset);
+      else img.removeAttribute("srcset");
       img.alt = old.alt;
       img.style.filter = old.filter;
       return;
     }
-    if (action === 'blur') {
-      img.style.filter = 'blur(14px)';
+    if (action === "blur") {
+      img.style.filter = "blur(14px)";
       return;
     }
-    const label = action === 'redact' ? 'REDACTED IMAGE' : 'Sample image';
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="360"><rect width="100%" height="100%" fill="${action === 'redact' ? '#151a27' : '#dce9f2'}"/><text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" fill="${action === 'redact' ? 'white' : '#28445c'}" font-family="Arial" font-size="27">${label}</text></svg>`;
-    img.removeAttribute('srcset');
+    const label = action === "redact" ? "REDACTED IMAGE" : "Sample image";
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="360"><rect width="100%" height="100%" fill="${action === "redact" ? "#151a27" : "#dce9f2"}"/><text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" fill="${action === "redact" ? "white" : "#28445c"}" font-family="Arial" font-size="27">${label}</text></svg>`;
+    img.removeAttribute("srcset");
     img.src = `data:image/svg+xml,${encodeURIComponent(svg)}`;
     img.alt = label;
     img.style.filter = old.filter;
     return;
   }
 
-  if (target.kind === 'field') {
-    const field = target.element;
-    if (action === 'blur') {
-      field.style.filter = 'blur(5px)';
-      showNotice('Blur applies to the whole field. Click the field to edit it.', field.getBoundingClientRect());
-      return;
-    }
-    const { start, end } = target;
-    const rawTargetText = field.value.slice(start, end);
-
-    let replacement = '';
-    if (action === 'redact') {
-      replacement = '[REDACTED]';
-    } else if (action === 'placeholder') {
-      const findings = ruleMatcher.match(rawTargetText);
-      const repair = privacyReplacer.replace(rawTargetText, findings, [], 'semantic_placeholder');
-      replacement = repair.sanitizedText.length > 0 && repair.sanitizedText !== rawTargetText
-        ? repair.sanitizedText
-        : 'YOUR_SECRET_VALUE';
-    } else {
-      replacement = createDummyText(rawTargetText);
-    }
-
-    field.setRangeText(replacement, start, end, 'end');
-    field.dispatchEvent(new Event('input', { bubbles: true }));
-
-    // Run Pre-Flight Verification (PRD F3)
-    const verification = repairVerifier.verify(field.value, ruleMatcher.match(rawTargetText));
-    showNotice(
-      verification.isClean
-        ? 'Verified: Sensitive data removed. Safe to send.'
-        : 'Warning: Some sensitive data may still remain in field.',
-      field.getBoundingClientRect()
-    );
-    return;
-  }
-
   let element: HTMLElement;
-  if (target.kind === 'selection') {
+  if (target.kind === "selection") {
     const range = target.range;
     if (range.collapsed || !range.commonAncestorContainer.isConnected) return;
-    element = document.createElement('span');
-    element.className = 'pl-finding pl-manual';
-    element.setAttribute('data-pl-type', 'Manual selection');
+    element = document.createElement("span");
+    element.className = "pl-finding pl-manual";
+    element.setAttribute("data-pl-type", "Manual selection");
     const original = range.extractContents();
     originalText.set(element, original.cloneNode(true) as DocumentFragment);
     element.append(original);
@@ -332,7 +846,7 @@ function applyAction(target: Target, action: Action): void {
   }
 
   const original = originalText.get(element);
-  if (action === 'removeHighlight') {
+  if (action === "removeHighlight") {
     if (original) {
       const restored = original.cloneNode(true) as DocumentFragment;
       const walker = document.createTreeWalker(restored, NodeFilter.SHOW_TEXT);
@@ -341,208 +855,298 @@ function applyAction(target: Target, action: Action): void {
     }
     return;
   }
-  if (action === 'restore') {
+  if (action === "restore") {
     if (original) element.replaceWith(original.cloneNode(true));
     return;
   }
-  const sourceText = original?.textContent ?? element.textContent ?? '';
-  element.classList.remove('pl-blur', 'pl-masked', 'pl-dummy');
+  const sourceText = original?.textContent ?? element.textContent ?? "";
+  element.classList.remove("pl-blur", "pl-masked", "pl-dummy");
   if (original) element.replaceChildren(original.cloneNode(true));
 
-  if (action === 'blur') {
-    element.classList.add('pl-blur');
-  } else if (action === 'placeholder') {
-    element.classList.add('pl-masked');
-    const type = element.getAttribute('data-pl-type') || 'text';
-    element.textContent = `YOUR_${type.toUpperCase().replace(/\s+/g, '_')}`;
-  } else if (action === 'dummy') {
-    element.classList.add('pl-dummy');
+  if (action === "blur") {
+    element.classList.add("pl-blur");
+  } else if (action === "placeholder") {
+    element.classList.add("pl-masked");
+    const type = element.getAttribute("data-pl-type") || "text";
+    element.textContent = `YOUR_${type.toUpperCase().replace(/\s+/g, "_")}`;
+  } else if (action === "dummy") {
+    element.classList.add("pl-dummy");
     element.textContent = createDummyText(sourceText);
   } else {
-    element.classList.add('pl-masked');
-    element.textContent = `[REDACTED: ${element.getAttribute('data-pl-type') || 'text'}]`;
+    element.classList.add("pl-masked");
+    element.textContent = `[REDACTED: ${element.getAttribute("data-pl-type") || "text"}]`;
   }
 }
 
-document.addEventListener('click', event => {
-  const target = event.target;
-  if (!(target instanceof Element) || target.closest('[data-privacy-lens-ui]')) return;
+document.addEventListener(
+  "click",
+  (event) => {
+    const target = event.target;
+    if (
+      !(target instanceof Element) ||
+      target.closest("[data-privacy-lens-ui]")
+    )
+      return;
 
-  const finding = target.closest('.pl-finding');
-  if (finding instanceof HTMLElement) {
-    event.preventDefault();
-    event.stopPropagation();
-    hint.classList.remove('show');
-    showMenu({ kind: 'text', element: finding }, finding.getBoundingClientRect(), findingLabel(finding));
-    return;
-  }
-  if (target instanceof HTMLImageElement) {
-    event.preventDefault();
-    event.stopPropagation();
-    pendingImage = target;
-    showMenu({ kind: 'image', element: target }, target.getBoundingClientRect(), 'Image actions');
-    return;
-  }
-  hideMenu();
-}, true);
+    const finding = target.closest(".pl-finding");
+    if (finding instanceof HTMLElement) {
+      event.preventDefault();
+      event.stopPropagation();
+      hint.classList.remove("show");
+      showMenu(
+        { kind: "text", element: finding },
+        finding.getBoundingClientRect(),
+        findingLabel(finding),
+      );
+      return;
+    }
+    if (target instanceof HTMLImageElement) {
+      event.preventDefault();
+      event.stopPropagation();
+      pendingImage = target;
+      showMenu(
+        { kind: "image", element: target },
+        target.getBoundingClientRect(),
+        "Image actions",
+      );
+      return;
+    }
+    hideMenu();
+  },
+  true,
+);
 
 function mapTypeToCategory(type: string): FindingCategory {
   const lower = type.toLowerCase();
-  if (lower.includes('api')) return 'api_key';
-  if (lower.includes('password') || lower.includes('secret')) return 'password';
-  if (lower.includes('bearer') || lower.includes('token')) return 'bearer_token';
-  if (lower.includes('private')) return 'private_key';
-  if (lower.includes('email')) return 'email';
-  if (lower.includes('phone')) return 'phone';
-  return 'custom_sensitive';
+  if (lower.includes("api")) return "api_key";
+  if (lower.includes("password") || lower.includes("secret")) return "password";
+  if (lower.includes("bearer") || lower.includes("token"))
+    return "bearer_token";
+  if (lower.includes("private")) return "private_key";
+  if (lower.includes("email")) return "email";
+  if (lower.includes("phone")) return "phone";
+  return "custom_sensitive";
 }
 
 function updateFindingHint(event: PointerEvent): void {
-  const finding = event.target instanceof Element ? event.target.closest('.pl-finding') : null;
+  const finding =
+    event.target instanceof Element
+      ? event.target.closest(".pl-finding")
+      : null;
   if (!(finding instanceof HTMLElement)) {
     if (activeHintFinding) {
       activeHintFinding = null;
-      hint.classList.remove('show');
+      hint.classList.remove("show");
     }
     return;
   }
-  if (panel.classList.contains('show')) return;
-  if (finding === activeHintFinding && hint.classList.contains('show')) return;
+  if (panel.classList.contains("show")) return;
+  if (finding === activeHintFinding && hint.classList.contains("show")) return;
   activeHintFinding = finding;
 
-  const findingType = finding.getAttribute('data-pl-type') || 'Sensitive text';
-  if (finding.classList.contains('pl-manual')) {
-    hintCopy.textContent = 'Manually masked text. Click for actions.';
+  const findingType = finding.getAttribute("data-pl-type") || "Sensitive text";
+  if (finding.classList.contains("pl-manual")) {
+    hintCopy.textContent = "Manually masked text. Click for actions.";
   } else {
     const category = mapTypeToCategory(findingType);
-    const risk = riskAnalyzer.analyzeRisk(category, finding.textContent || '', 'medium');
+    const risk = riskAnalyzer.analyzeRisk(
+      category,
+      finding.textContent || "",
+      "medium",
+    );
     hintCopy.textContent = `${findingType}: ${risk.explanation} Click for actions.`;
   }
   placeBubble(hint, finding.getBoundingClientRect());
 }
 
-document.addEventListener('pointerover', updateFindingHint, true);
-document.addEventListener('pointermove', updateFindingHint, true);
+document.addEventListener("pointerover", updateFindingHint, true);
+document.addEventListener("pointermove", updateFindingHint, true);
 
 function pointInsideSelection(range: Range, x: number, y: number): boolean {
   return Array.from(range.getClientRects()).some(
-    rect => x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+    (rect) =>
+      x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom,
   );
 }
 
-document.addEventListener('pointermove', event => {
-  if (!pendingSelection || panel.classList.contains('show') || !pendingSelection.commonAncestorContainer.isConnected) return;
-  if (pointInsideSelection(pendingSelection, event.clientX, event.clientY)) {
-    showMenu({ kind: 'selection', range: pendingSelection.cloneRange() }, pendingSelection.getBoundingClientRect(), 'Selected text');
-  }
-}, true);
+document.addEventListener(
+  "pointermove",
+  (event) => {
+    if (
+      !pendingSelection ||
+      panel.classList.contains("show") ||
+      !pendingSelection.commonAncestorContainer.isConnected
+    )
+      return;
+    if (pointInsideSelection(pendingSelection, event.clientX, event.clientY)) {
+      showMenu(
+        { kind: "selection", range: pendingSelection.cloneRange() },
+        pendingSelection.getBoundingClientRect(),
+        "Selected text",
+      );
+    }
+  },
+  true,
+);
 
-document.addEventListener('pointerdown', event => {
-  if (event.target instanceof Element && event.target.closest('[data-privacy-lens-ui]')) return;
-  if (pendingSelection && !pointInsideSelection(pendingSelection, event.clientX, event.clientY)) pendingSelection = null;
-}, true);
+document.addEventListener(
+  "pointerdown",
+  (event) => {
+    if (
+      event.target instanceof Element &&
+      event.target.closest("[data-privacy-lens-ui]")
+    )
+      return;
+    if (
+      pendingSelection &&
+      !pointInsideSelection(pendingSelection, event.clientX, event.clientY)
+    )
+      pendingSelection = null;
+  },
+  true,
+);
 
-document.addEventListener('pointerout', event => {
-  const finding = event.target instanceof Element ? event.target.closest('.pl-finding') : null;
-  if (finding && (!(event.relatedTarget instanceof Node) || !finding.contains(event.relatedTarget))) {
-    activeHintFinding = null;
-    hint.classList.remove('show');
-  }
-}, true);
+document.addEventListener(
+  "pointerout",
+  (event) => {
+    const finding =
+      event.target instanceof Element
+        ? event.target.closest(".pl-finding")
+        : null;
+    if (
+      finding &&
+      (!(event.relatedTarget instanceof Node) ||
+        !finding.contains(event.relatedTarget))
+    ) {
+      activeHintFinding = null;
+      hint.classList.remove("show");
+    }
+  },
+  true,
+);
 
-document.addEventListener('contextmenu', event => {
-  if (event.target instanceof HTMLImageElement) pendingImage = event.target;
-  const selection = getSelection();
-  if (selection && !selection.isCollapsed && selection.rangeCount) pendingSelection = selection.getRangeAt(0).cloneRange();
-}, true);
+document.addEventListener(
+  "contextmenu",
+  (event) => {
+    if (event.target instanceof HTMLImageElement) pendingImage = event.target;
+    const selection = getSelection();
+    if (selection && !selection.isCollapsed && selection.rangeCount)
+      pendingSelection = selection.getRangeAt(0).cloneRange();
+  },
+  true,
+);
 
-document.addEventListener('mouseup', event => {
+document.addEventListener("mouseup", (event) => {
   if (event.button !== 0) return;
   const active = document.activeElement;
-  if ((active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) && active.selectionStart !== active.selectionEnd) {
-    showMenu(
-      { kind: 'field', element: active, start: active.selectionStart!, end: active.selectionEnd! },
-      active.getBoundingClientRect(),
-      'Selected field text'
-    );
+  // Editable fields and chatbot prompts are exclusively handled by In-Field Guardian
+  if (
+    active instanceof HTMLInputElement ||
+    active instanceof HTMLTextAreaElement ||
+    (active instanceof HTMLElement &&
+      (active.isContentEditable ||
+        active.getAttribute("contenteditable") === "true"))
+  ) {
     return;
   }
   const selection = getSelection();
-  if (!selection || selection.isCollapsed || !selection.rangeCount || !selection.toString().trim()) {
+  if (
+    !selection ||
+    selection.isCollapsed ||
+    !selection.rangeCount ||
+    !selection.toString().trim()
+  ) {
     pendingSelection = null;
     return;
   }
   const range = selection.getRangeAt(0).cloneRange();
-  if (range.commonAncestorContainer.parentElement?.closest('[data-privacy-lens-ui]')) return;
+  if (
+    range.commonAncestorContainer.parentElement?.closest(
+      "[data-privacy-lens-ui]",
+    )
+  )
+    return;
   pendingSelection = range.cloneRange();
   hideMenu();
 });
 
-document.addEventListener('paste', event => {
-  const field = event.target;
-  if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
-  const value = event.clipboardData?.getData('text/plain') || '';
-  if (!value) return;
-  const matches = detect(value);
-  if (matches.length) showNotice(`Sensitive paste: ${[...new Set(matches.map(item => item.type))].join(', ')}. Review before submitting.`, field.getBoundingClientRect());
-  void analyzeWithAi(value.slice(0, 5000)).then(ai => {
-    if (ai.length) showNotice(`AI also found: ${[...new Set(ai.map(item => item.type))].join(', ')}. Review before submitting.`, field.getBoundingClientRect());
-  });
-}, true);
+document.addEventListener(
+  "focusin",
+  (event) => {
+    if (
+      event.target instanceof HTMLInputElement ||
+      event.target instanceof HTMLTextAreaElement
+    )
+      event.target.style.filter = "";
+  },
+  true,
+);
 
-document.addEventListener('input', event => {
-  const field = event.target;
-  if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
-  clearTimeout(fieldTimer);
-  fieldTimer = window.setTimeout(() => {
-    if (field instanceof HTMLInputElement && field.type === 'password') {
-      showNotice('Password field: keep this value private.', field.getBoundingClientRect());
-      return;
-    }
-    const matches = detect(field.value);
-    if (matches.length) showNotice(`Sensitive field: ${[...new Set(matches.map(item => item.type))].join(', ')}.`, field.getBoundingClientRect());
-  }, 250);
-}, true);
-
-document.addEventListener('focusin', event => {
-  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) event.target.style.filter = '';
-}, true);
-
-async function analyzeWithAi(text: string): Promise<{ text: string; type: string; severity: 'high' | 'medium' }[]> {
+async function analyzeWithAi(
+  text: string,
+): Promise<{ text: string; type: string; severity: "high" | "medium" }[]> {
   try {
-    const response = await chrome.runtime.sendMessage({ kind: 'AI_ANALYZE', text });
+    const response = await chrome.runtime.sendMessage({
+      kind: "AI_ANALYZE",
+      text,
+    });
     if (!response.ok) {
-      aiError = response.error || 'AI request failed.';
-      console.warn('TekaSend:', aiError);
+      aiError = response.error || "AI request failed.";
+      console.warn("TekaSend:", aiError);
       return [];
     }
-    aiError = '';
+    aiError = "";
     return response.findings || [];
   } catch {
-    aiError = 'Could not reach the extension background worker.';
+    aiError = "Could not reach the extension background worker.";
     return [];
   }
 }
 
-function categorizeFindingType(type: string): 'apiKey' | 'password' | 'personal' | 'financial' {
+function categorizeFindingType(
+  type: string,
+): "apiKey" | "password" | "personal" | "financial" {
   const lower = type.toLowerCase();
-  if (lower.includes('api') || lower.includes('token') || lower.includes('key') || lower.includes('secret') || lower.includes('bearer')) {
-    return 'apiKey';
+  if (
+    lower.includes("api") ||
+    lower.includes("token") ||
+    lower.includes("key") ||
+    lower.includes("secret") ||
+    lower.includes("bearer")
+  ) {
+    return "apiKey";
   }
-  if (lower.includes('pass') || lower.includes('pwd')) {
-    return 'password';
+  if (lower.includes("pass") || lower.includes("pwd")) {
+    return "password";
   }
-  if (lower.includes('card') || lower.includes('credit') || lower.includes('ssn') || lower.includes('financial') || lower.includes('tax')) {
-    return 'financial';
+  if (
+    lower.includes("card") ||
+    lower.includes("credit") ||
+    lower.includes("ssn") ||
+    lower.includes("financial") ||
+    lower.includes("tax")
+  ) {
+    return "financial";
   }
-  return 'personal';
+  return "personal";
 }
 
-async function scanAi(force = false): Promise<{ ok: boolean; error?: string; breakdown?: { apiKey: number; password: number; personal: number; financial: number; total: number } }> {
+async function scanAi(force = false): Promise<{
+  ok: boolean;
+  error?: string;
+  breakdown?: {
+    apiKey: number;
+    password: number;
+    personal: number;
+    financial: number;
+    total: number;
+  };
+}> {
   if (aiScanned && !force) return { ok: true };
   aiScanned = true;
-  if (!document.body) return { ok: false, error: 'This page has no content to scan.' };
-  const text = (document.body.innerText || '').slice(0, 5000);
+  if (!document.body)
+    return { ok: false, error: "This page has no content to scan." };
+  const text = (document.body.innerText || "").slice(0, 5000);
   const found = await analyzeWithAi(text);
   if (aiError) return { ok: false, error: aiError };
 
@@ -551,7 +1155,7 @@ async function scanAi(force = false): Promise<{ ok: boolean; error?: string; bre
     password: 0,
     personal: 0,
     financial: 0,
-    total: found.length
+    total: found.length,
   };
 
   for (const item of found) {
@@ -568,7 +1172,7 @@ async function scanAi(force = false): Promise<{ ok: boolean; error?: string; bre
     if (eligible(node)) nodes.push(node);
   }
   for (const node of nodes) {
-    const value = node.nodeValue || '';
+    const value = node.nodeValue || "";
     const findings: Finding[] = [];
     for (const item of found) {
       let index = value.indexOf(item.text);
@@ -588,27 +1192,38 @@ async function scanAi(force = false): Promise<{ ok: boolean; error?: string; bre
     }
     wrapNode(node, clean);
   }
-  observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+  observer.observe(document.body, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
   return { ok: true, breakdown };
 }
 
-chrome.runtime.onMessage.addListener((message: { kind?: string; action?: Action; source?: string }, _sender, respond) => {
-  if (message.kind === 'ACTION' && message.action) {
-    const target = message.source === 'image' && pendingImage
-      ? { kind: 'image' as const, element: pendingImage }
-      : pendingSelection
-      ? { kind: 'selection' as const, range: pendingSelection }
-      : null;
-    if (target) applyAction(target, message.action);
-    respond({ ok: !!target });
-  }
-  if (message.kind === 'SCAN_AI') {
-    void scanAi(true).then(respond);
-    return true;
-  }
-});
+chrome.runtime.onMessage.addListener(
+  (
+    message: { kind?: string; action?: Action; source?: string },
+    _sender,
+    respond,
+  ) => {
+    if (message.kind === "ACTION" && message.action) {
+      const target =
+        message.source === "image" && pendingImage
+          ? { kind: "image" as const, element: pendingImage }
+          : pendingSelection
+            ? { kind: "selection" as const, range: pendingSelection }
+            : null;
+      if (target) applyAction(target, message.action);
+      respond({ ok: !!target });
+    }
+    if (message.kind === "SCAN_AI") {
+      void scanAi(true).then(respond);
+      return true;
+    }
+  },
+);
 
-chrome.storage.onChanged.addListener(changes => {
+chrome.storage.onChanged.addListener((changes) => {
   if (!changes.aiEnabled && !changes.apiKey) return;
   clearTimeout(aiSettingsTimer);
   aiSettingsTimer = window.setTimeout(() => void scanAi(true), 350);
