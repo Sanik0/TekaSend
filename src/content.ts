@@ -1,7 +1,8 @@
 import { detect, type Finding } from './detect';
+import { createDummyText } from './dummy';
 
 type Action = 'blur' | 'dummy' | 'redact' | 'restore' | 'removeHighlight';
-type Target = { kind: 'text'; element: HTMLElement } | { kind: 'image'; element: HTMLImageElement } | { kind: 'selection'; range: Range } | { kind: 'field'; element: HTMLInputElement | HTMLTextAreaElement };
+type Target = { kind: 'text'; element: HTMLElement } | { kind: 'image'; element: HTMLImageElement } | { kind: 'selection'; range: Range } | { kind: 'field'; element: HTMLInputElement | HTMLTextAreaElement; start: number; end: number };
 const originalText = new WeakMap<HTMLElement, DocumentFragment>();
 const ignoredText = new WeakSet<Text>();
 const originalImages = new WeakMap<HTMLImageElement, { src: string; srcset: string; alt: string; filter: string }>();
@@ -22,6 +23,7 @@ style.textContent = `
   .pl-finding.pl-blur { filter:blur(5px)!important; user-select:none!important; }
   .pl-finding.pl-blur:hover { filter:blur(5px)!important; }
   .pl-finding.pl-masked { background:#191d27!important; color:white!important; padding:0 3px!important; }
+  .pl-finding.pl-dummy { background:transparent!important; color:inherit!important; padding:0!important; }
 `;
 (document.head || document.documentElement).append(style);
 
@@ -185,8 +187,8 @@ function applyAction(target: Target, action: Action) {
   if (target.kind === 'field') {
     const field = target.element;
     if (action === 'blur') { field.style.filter = 'blur(5px)'; showNotice('Blur applies to the whole field. Click the field to edit it.', field.getBoundingClientRect()); return; }
-    const start = field.selectionStart ?? 0, end = field.selectionEnd ?? field.value.length;
-    const replacement = action === 'redact' ? '[REDACTED]' : 'example@example.com';
+    const { start, end } = target;
+    const replacement = action === 'redact' ? '[REDACTED]' : createDummyText(field.value.slice(start, end));
     field.setRangeText(replacement, start, end, 'end');
     field.dispatchEvent(new Event('input', { bubbles: true }));
     return;
@@ -211,13 +213,13 @@ function applyAction(target: Target, action: Action) {
     return;
   }
   if (action === 'restore') { if (original) element.replaceWith(original.cloneNode(true)); return; }
-  element.classList.remove('pl-blur', 'pl-masked');
+  const sourceText = original?.textContent ?? element.textContent ?? '';
+  element.classList.remove('pl-blur', 'pl-masked', 'pl-dummy');
   if (original) element.replaceChildren(original.cloneNode(true));
   if (action === 'blur') element.classList.add('pl-blur');
-  else { element.classList.add('pl-masked'); element.textContent = action === 'redact' ? `[REDACTED: ${element.getAttribute('data-pl-type') || 'text'}]` : dummyFor(element.getAttribute('data-pl-type') || ''); }
+  else if (action === 'dummy') { element.classList.add('pl-dummy'); element.textContent = createDummyText(sourceText); }
+  else { element.classList.add('pl-masked'); element.textContent = `[REDACTED: ${element.getAttribute('data-pl-type') || 'text'}]`; }
 }
-
-function dummyFor(type: string) { return /email/i.test(type) ? 'user@example.com' : /phone/i.test(type) ? '0912 345 6789' : /password/i.test(type) ? 'example-password' : /image/i.test(type) ? '[Sample image]' : 'example-value'; }
 
 document.addEventListener('click', event => {
   const target = event.target;
@@ -278,7 +280,7 @@ document.addEventListener('mouseup', event => {
   if (event.button !== 0) return;
   const active = document.activeElement;
   if ((active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) && active.selectionStart !== active.selectionEnd) {
-    showMenu({ kind: 'field', element: active }, active.getBoundingClientRect(), 'Selected field text'); return;
+    showMenu({ kind: 'field', element: active, start: active.selectionStart!, end: active.selectionEnd! }, active.getBoundingClientRect(), 'Selected field text'); return;
   }
   const selection = getSelection();
   if (!selection || selection.isCollapsed || !selection.rangeCount || !selection.toString().trim()) { pendingSelection = null; return; }
