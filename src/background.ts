@@ -1,3 +1,14 @@
+/**
+ * Background Service Worker Entry Point
+ *
+ * Coordinates context menu actions, background routing to the on-device AI subsystem,
+ * and maintains legacy endpoints for backward compatibility.
+ */
+
+import { BackgroundAiRouter } from './background/router.js';
+
+const aiRouter = new BackgroundAiRouter();
+
 type AiFinding = { text: string; type: string; severity: 'high' | 'medium' };
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -12,13 +23,42 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
-  if (!message || typeof message !== 'object' || !('kind' in message) || message.kind !== 'AI_ANALYZE') return;
-  const text = 'text' in message && typeof message.text === 'string' ? message.text.slice(0, 5000) : '';
-  if (!text) { sendResponse({ ok: true, findings: [] }); return; }
-  void analyze(text).then(findings => sendResponse({ ok: true, findings })).catch(error => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'AI request failed' }));
-  return true;
+  if (!message || typeof message !== 'object') {
+    return;
+  }
+
+  const msg = message as { kind?: string };
+
+  // Route to the new on-device AI subsystem
+  if (
+    msg.kind === 'HYBRID_SCAN_REQUEST' ||
+    msg.kind === 'SMART_REPAIR_REQUEST' ||
+    msg.kind === 'VERIFY_REPAIR_REQUEST' ||
+    msg.kind === 'MODEL_STATUS_REQUEST'
+  ) {
+    void aiRouter.handleMessage(message).then(response => {
+      sendResponse(response);
+    });
+    return true; // Keep message channel open for async response
+  }
+
+  // Backward compatibility mock route for partner
+  if (msg.kind === 'AI_ANALYZE') {
+    const text = 'text' in message && typeof message.text === 'string' ? message.text.slice(0, 5000) : '';
+    if (!text) {
+      sendResponse({ ok: true, findings: [] });
+      return;
+    }
+    void analyze(text)
+      .then(findings => sendResponse({ ok: true, findings }))
+      .catch(error => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'AI request failed' }));
+    return true;
+  }
 });
 
+/**
+ * Legacy cloud endpoint retained for partner mockup compatibility.
+ */
 async function analyze(text: string): Promise<AiFinding[]> {
   const settings = await chrome.storage.local.get(['apiKey', 'aiEnabled']);
   if (!settings.aiEnabled || typeof settings.apiKey !== 'string' || !settings.apiKey.trim()) throw new Error('Enable AI and save an API key in the popup first.');

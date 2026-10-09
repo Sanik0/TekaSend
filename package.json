@@ -8,11 +8,15 @@
     "demo": "node scripts/serve-demo.mjs",
     "watch": "node scripts/build.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/",
+    "smoke": "node scripts/smoke-test.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.300",
     "esbuild": "^0.25.0",
     "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.1"
   }
 }
