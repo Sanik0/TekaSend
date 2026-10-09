@@ -132,6 +132,8 @@ export interface RepairResult {
   readonly replacementsCount: number;
   /** Mapping of original raw substrings to their applied replacements */
   readonly replacementMap: ReadonlyMap<string, string>;
+  /** Mapping of original raw substrings to their assigned sequential entity index */
+  readonly rawToEntityIndexMap?: ReadonlyMap<string, number>;
 }
 
 /**

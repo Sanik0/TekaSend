@@ -4,6 +4,12 @@ import { RiskAnalyzer } from './ai/reasoning/risk-analyzer.js';
 import type { FindingCategory } from './ai/types.js';
 import { SpoilerRenderer } from './spoiler.js';
 import { DEFAULT_EFFECT, isEffect, type Effect } from './shared/effects.js';
+import { DeterministicRuleMatcher } from './ai/detectors/regex-rules.js';
+import { PrivacyReplacer } from './ai/repair/replacer.js';
+import type { SensitiveFinding, RepairStrategyType } from './ai/types.js';
+import { InputObserver, type FieldChangeEvent } from './content/observer/input-observer.js';
+import { InputIndicatorOverlay, type ProtectedItem } from './content/overlay/input-indicator.js';
+import { InputHighlighter } from './content/overlay/input-highlighter.js';
 
 type Action = Effect | 'restore';
 type DetectionCategory = 'apiKey' | 'password' | 'personal' | 'financial';
@@ -11,11 +17,37 @@ type DisplayFinding = Finding & { category?: FindingCategory };
 type Target = { kind: 'text'; element: HTMLElement };
 
 const originalText = new WeakMap<HTMLElement, DocumentFragment>();
+// Session storage for protected items per input field
+const elementProtectedMap = new WeakMap<HTMLElement, ProtectedItem[]>();
+
+function getProtectedItems(element: HTMLElement): ProtectedItem[] {
+  return elementProtectedMap.get(element) || [];
+}
+
+function setProtectedItems(element: HTMLElement, items: ProtectedItem[]): void {
+  elementProtectedMap.set(element, items);
+}
+
+function addOrUpdateProtectedItem(element: HTMLElement, item: ProtectedItem): void {
+  const current = getProtectedItems(element).filter(
+    (p) => p.id !== item.id && p.originalRawText !== item.originalRawText
+  );
+  current.push(item);
+  elementProtectedMap.set(element, current);
+}
+
+function removeProtectedItem(element: HTMLElement, itemId: string): void {
+  const current = getProtectedItems(element).filter((p) => p.id !== itemId);
+  elementProtectedMap.set(element, current);
+}
+
+const ruleMatcher = new DeterministicRuleMatcher();
+const privacyReplacer = new PrivacyReplacer();
+
 
 const riskAnalyzer = new RiskAnalyzer();
 
 let scanTimer = 0;
-let fieldTimer = 0;
 let aiScanned = false;
 let aiError = '';
 let aiSettingsTimer = 0;
@@ -122,6 +154,467 @@ const hintCopy = document.createElement('div');
 hintCopy.className = 'copy';
 hint.append(brand.cloneNode(true), hintCopy);
 shadow.append(hint);
+
+function applyFieldRepair(
+  element: HTMLElement,
+  finding: SensitiveFinding,
+  strategy: RepairStrategyType,
+): void {
+  const currentText = inputObserver.extractFieldText(element);
+  if (!currentText) return;
+
+  // 1. Get all currently detected findings across the full input text
+  const allCurrentFindings = ruleMatcher.match(currentText);
+  // 2. Get existing protected items for this element
+  const protectedList = getProtectedItems(element);
+
+  // 3. Find all occurrences matching finding.rawText so all instances of the same entity are sanitized consistently
+  const targetOccurrences = allCurrentFindings.filter(
+    (f) => f.rawText === finding.rawText,
+  );
+  const targetFindings =
+    targetOccurrences.length > 0 ? targetOccurrences : [finding];
+
+  // 4. Run replacer with full context of active findings & existing protected items
+  const repair = privacyReplacer.replace(
+    currentText,
+    targetFindings,
+    targetFindings.map((f) => ({ findingId: f.id, strategy })),
+    strategy,
+    protectedList,
+    allCurrentFindings,
+  );
+
+  const sanitizedText = repair.sanitizedText;
+  inputObserver.setFieldText(element, sanitizedText);
+
+  // 5. Get the actual assigned replacement token from the replacementMap
+  const replacementToken =
+    repair.replacementMap.get(finding.rawText) ||
+    privacyReplacer.generateReplacement(finding, strategy, 0);
+
+  const assignedEntityIndex =
+    repair.rawToEntityIndexMap?.get(finding.rawText) ?? 1;
+
+  addOrUpdateProtectedItem(element, {
+    id: finding.id,
+    category: finding.category,
+    label: finding.label,
+    originalRawText: finding.rawText,
+    currentToken: replacementToken,
+    currentStrategy: strategy,
+    entityIndex: assignedEntityIndex,
+  });
+
+  // Also update any other protected items that were upgraded (e.g. from [EMAIL_ADDRESS] to [EMAIL_ADDRESS_1])
+  for (const item of protectedList) {
+    if (repair.replacementMap.has(item.originalRawText)) {
+      const updatedToken = repair.replacementMap.get(item.originalRawText)!;
+      const updatedIdx =
+        repair.rawToEntityIndexMap?.get(item.originalRawText) ??
+        item.entityIndex;
+      addOrUpdateProtectedItem(element, {
+        ...item,
+        currentToken: updatedToken,
+        entityIndex: updatedIdx,
+      });
+    }
+  }
+
+  // 6. Instant re-scan updated text and update in-field indicator and highlights
+  const newFindings = ruleMatcher.match(sanitizedText);
+  const bounds = element.getBoundingClientRect();
+  const updatedProtectedList = getProtectedItems(element);
+  inputIndicator.update(element, newFindings, bounds, updatedProtectedList);
+  inputHighlighter.update(element, newFindings);
+}
+
+// Initialize In-Field Sensitive Word Highlighter (Light iOS-Style Tint & Micro-Tooltip)
+const inputHighlighter = new InputHighlighter(
+  shadow,
+  (element, finding, strategy) => {
+    applyFieldRepair(element, finding, strategy);
+  },
+);
+
+// Initialize In-Field Privacy Indicator Overlay (PRD F1, F2, F3)
+const inputIndicator = new InputIndicatorOverlay(shadow, {
+  onApplyRepair: (element, finding, strategy) => {
+    applyFieldRepair(element, finding, strategy);
+  },
+  onApplyRepairAll: (element, strategy) => {
+    const currentText = inputObserver.extractFieldText(element);
+    if (!currentText) return;
+
+    const findings = ruleMatcher.match(currentText);
+    const protectedList = getProtectedItems(element);
+    const repair = privacyReplacer.replace(
+      currentText,
+      findings,
+      [],
+      strategy,
+      protectedList,
+      findings,
+    );
+    const sanitizedText = repair.sanitizedText;
+
+    inputObserver.setFieldText(element, sanitizedText);
+
+    for (const finding of findings) {
+      const replacementToken =
+        repair.replacementMap.get(finding.rawText) ||
+        privacyReplacer.generateReplacement(finding, strategy, 0);
+
+      const assignedEntityIndex =
+        repair.rawToEntityIndexMap?.get(finding.rawText) ?? 1;
+
+      addOrUpdateProtectedItem(element, {
+        id: finding.id,
+        category: finding.category,
+        label: finding.label,
+        originalRawText: finding.rawText,
+        currentToken: replacementToken,
+        currentStrategy: strategy,
+        entityIndex: assignedEntityIndex,
+      });
+    }
+
+    const newFindings = ruleMatcher.match(sanitizedText);
+    const bounds = element.getBoundingClientRect();
+    const updatedProtectedList = getProtectedItems(element);
+    inputIndicator.update(element, newFindings, bounds, updatedProtectedList);
+    inputHighlighter.update(element, newFindings);
+  },
+  onSwitchStrategy: (element, item, newStrategy) => {
+    const currentText = inputObserver.extractFieldText(element);
+    if (!currentText) return;
+
+    const protectedList = getProtectedItems(element);
+    const activeFindings = ruleMatcher.match(currentText);
+    const distinctInCat = new Set<string>();
+    for (const p of protectedList) {
+      if (p.category === item.category) distinctInCat.add(p.originalRawText);
+    }
+    for (const f of activeFindings) {
+      if (f.category === item.category) distinctInCat.add(f.rawText);
+    }
+    const totalDistinct = distinctInCat.size;
+    const entityIndex = totalDistinct > 1 ? (item.entityIndex || 1) : 0;
+
+    const dummyFinding = {
+      id: item.id,
+      label: item.label,
+      category: item.category,
+      rawText: item.originalRawText,
+      start: 0,
+      end: item.originalRawText.length,
+      severity: "critical" as const,
+      source: "regex_rule" as const,
+      confidence: 1.0,
+      suggestedReplacement: `YOUR_${item.category.toUpperCase()}`,
+    };
+
+    const newToken = privacyReplacer.generateReplacement(
+      dummyFinding,
+      newStrategy,
+      entityIndex,
+    );
+
+    const updatedText = currentText.includes(item.currentToken)
+      ? currentText.split(item.currentToken).join(newToken)
+      : currentText;
+
+    inputObserver.setFieldText(element, updatedText);
+
+    addOrUpdateProtectedItem(element, {
+      ...item,
+      currentToken: newToken,
+      currentStrategy: newStrategy,
+      entityIndex: item.entityIndex ?? (totalDistinct > 1 ? entityIndex : 1),
+    });
+
+    const newFindings = ruleMatcher.match(updatedText);
+    const bounds = element.getBoundingClientRect();
+    const updatedList = getProtectedItems(element);
+    inputIndicator.update(element, newFindings, bounds, updatedList);
+    inputHighlighter.update(element, newFindings);
+  },
+  onRestoreOriginal: (element, item) => {
+    const currentText = inputObserver.extractFieldText(element);
+    if (!currentText) return;
+
+    const restoredText = currentText.includes(item.currentToken)
+      ? currentText.split(item.currentToken).join(item.originalRawText)
+      : currentText;
+
+    inputObserver.setFieldText(element, restoredText);
+    removeProtectedItem(element, item.id);
+
+    const newFindings = ruleMatcher.match(restoredText);
+    const bounds = element.getBoundingClientRect();
+    const protectedList = getProtectedItems(element);
+    inputIndicator.update(element, newFindings, bounds, protectedList);
+    inputHighlighter.update(element, newFindings);
+  },
+  onSwitchAllStrategies: (element, newStrategy) => {
+    let currentText = inputObserver.extractFieldText(element);
+    if (!currentText) return;
+
+    const protectedList = getProtectedItems(element);
+    const activeFindings = ruleMatcher.match(currentText);
+
+    for (const item of protectedList) {
+      const distinctInCat = new Set<string>();
+      for (const p of protectedList) {
+        if (p.category === item.category) distinctInCat.add(p.originalRawText);
+      }
+      for (const f of activeFindings) {
+        if (f.category === item.category) distinctInCat.add(f.rawText);
+      }
+      const totalDistinct = distinctInCat.size;
+      const entityIndex = totalDistinct > 1 ? (item.entityIndex || 1) : 0;
+
+      const dummyFinding = {
+        id: item.id,
+        label: item.label,
+        category: item.category,
+        rawText: item.originalRawText,
+        start: 0,
+        end: item.originalRawText.length,
+        severity: "critical" as const,
+        source: "regex_rule" as const,
+        confidence: 1.0,
+        suggestedReplacement: `YOUR_${item.category.toUpperCase()}`,
+      };
+
+      const newToken = privacyReplacer.generateReplacement(
+        dummyFinding,
+        newStrategy,
+        entityIndex,
+      );
+
+      if (currentText.includes(item.currentToken)) {
+        currentText = currentText.split(item.currentToken).join(newToken);
+      }
+
+      addOrUpdateProtectedItem(element, {
+        ...item,
+        currentToken: newToken,
+        currentStrategy: newStrategy,
+        entityIndex: item.entityIndex ?? (totalDistinct > 1 ? entityIndex : 1),
+      });
+    }
+
+    inputObserver.setFieldText(element, currentText);
+
+    const newFindings = ruleMatcher.match(currentText);
+    const bounds = element.getBoundingClientRect();
+    const updatedList = getProtectedItems(element);
+    inputIndicator.update(element, newFindings, bounds, updatedList);
+    inputHighlighter.update(element, newFindings);
+  },
+  onRestoreAll: (element) => {
+    let currentText = inputObserver.extractFieldText(element);
+    if (!currentText) return;
+
+    const protectedList = getProtectedItems(element);
+    for (const item of protectedList) {
+      if (currentText.includes(item.currentToken)) {
+        currentText = currentText.split(item.currentToken).join(
+          item.originalRawText,
+        );
+      }
+    }
+
+    setProtectedItems(element, []);
+    inputObserver.setFieldText(element, currentText);
+
+    const newFindings = ruleMatcher.match(currentText);
+    const bounds = element.getBoundingClientRect();
+    inputIndicator.update(element, newFindings, bounds, []);
+    inputHighlighter.update(element, newFindings);
+  },
+});
+
+// Initialize Input Field Observer for AI chatbot prompts and forms
+const inputObserver = new InputObserver(
+  (event: FieldChangeEvent) => {
+    if (event.isPassword) {
+      inputIndicator.hide();
+      inputHighlighter.clear();
+      return;
+    }
+
+    // Instant deterministic rule scan (<0.1ms)
+    const findings = ruleMatcher.match(event.text);
+    const activeProtected = getProtectedItems(event.element).filter((p) =>
+      event.text.includes(p.currentToken),
+    );
+    setProtectedItems(event.element, activeProtected);
+
+    inputIndicator.update(
+      event.element,
+      findings,
+      event.bounds,
+      activeProtected,
+    );
+    inputHighlighter.update(event.element, findings);
+  },
+  () => {
+    // Only hide if the notice card is not currently open
+    if (!inputIndicator.getIsCardVisible()) {
+      inputIndicator.hide();
+      inputHighlighter.clear();
+    }
+  },
+);
+
+/**
+ * Instantly sanitizes all detected sensitive data in the active focused field via keyboard shortcut.
+ */
+function sanitizeActiveField(
+  strategy: RepairStrategyType = "semantic_placeholder",
+): boolean {
+  const activeElement = inputObserver.getActiveElement();
+  if (!activeElement || !activeElement.isConnected) return false;
+
+  const currentText = inputObserver.extractFieldText(activeElement);
+  if (!currentText) return false;
+
+  const findings = ruleMatcher.match(currentText);
+  const protectedList = getProtectedItems(activeElement);
+
+  if (findings.length === 0 && protectedList.length === 0) {
+    return false;
+  }
+
+  if (findings.length === 0 && protectedList.length > 0) {
+    // Switch existing protected items to the selected strategy
+    for (const item of protectedList) {
+      if (item.currentStrategy !== strategy) {
+        const distinctInCat = new Set<string>();
+        for (const p of protectedList) {
+          if (p.category === item.category) distinctInCat.add(p.originalRawText);
+        }
+        const totalDistinct = distinctInCat.size;
+        const entityIndex = totalDistinct > 1 ? (item.entityIndex || 1) : 0;
+
+        const dummyFinding: SensitiveFinding = {
+          id: item.id,
+          label: item.label,
+          category: item.category,
+          rawText: item.originalRawText,
+          start: 0,
+          end: item.originalRawText.length,
+          severity: "critical",
+          source: "regex_rule",
+          confidence: 1.0,
+          suggestedReplacement: `YOUR_${item.category.toUpperCase()}`,
+        };
+
+        const newToken = privacyReplacer.generateReplacement(
+          dummyFinding,
+          strategy,
+          entityIndex,
+        );
+        const liveText = inputObserver.extractFieldText(activeElement);
+        if (liveText.includes(item.currentToken)) {
+          const updatedText = liveText.split(item.currentToken).join(newToken);
+          inputObserver.setFieldText(activeElement, updatedText);
+        }
+
+        addOrUpdateProtectedItem(activeElement, {
+          ...item,
+          currentToken: newToken,
+          currentStrategy: strategy,
+          entityIndex: item.entityIndex ?? (totalDistinct > 1 ? entityIndex : 1),
+        });
+      }
+    }
+
+    const updatedText = inputObserver.extractFieldText(activeElement);
+    const newFindings = ruleMatcher.match(updatedText);
+    const bounds = activeElement.getBoundingClientRect();
+    const updatedList = getProtectedItems(activeElement);
+    inputIndicator.update(activeElement, newFindings, bounds, updatedList);
+    inputHighlighter.update(activeElement, newFindings);
+    return true;
+  }
+
+  // Replace all active findings with the requested strategy
+  const repair = privacyReplacer.replace(
+    currentText,
+    findings,
+    [],
+    strategy,
+    protectedList,
+    findings,
+  );
+  const sanitizedText = repair.sanitizedText;
+  inputObserver.setFieldText(activeElement, sanitizedText);
+
+  for (const finding of findings) {
+    const replacementToken =
+      repair.replacementMap.get(finding.rawText) ||
+      privacyReplacer.generateReplacement(finding, strategy, 0);
+
+    const assignedEntityIndex =
+      repair.rawToEntityIndexMap?.get(finding.rawText) ?? 1;
+
+    addOrUpdateProtectedItem(activeElement, {
+      id: finding.id,
+      category: finding.category,
+      label: finding.label,
+      originalRawText: finding.rawText,
+      currentToken: replacementToken,
+      currentStrategy: strategy,
+      entityIndex: assignedEntityIndex,
+    });
+  }
+
+  const newFindings = ruleMatcher.match(sanitizedText);
+  const bounds = activeElement.getBoundingClientRect();
+  const updatedProtectedList = getProtectedItems(activeElement);
+  inputIndicator.update(activeElement, newFindings, bounds, updatedProtectedList);
+  inputHighlighter.update(activeElement, newFindings);
+  return true;
+}
+
+// Global Keyboard Shortcut: Alt + P / Option + P or Cmd/Ctrl + Shift + P to sanitize active field
+document.addEventListener(
+  "keydown",
+  (event: KeyboardEvent) => {
+    const isAltP =
+      event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      (event.key === "p" || event.key === "P" || event.code === "KeyP");
+    const isCmdShiftP =
+      (event.metaKey || event.ctrlKey) &&
+      event.shiftKey &&
+      (event.key === "p" || event.key === "P" || event.code === "KeyP");
+    const isAltS =
+      event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      (event.key === "s" || event.key === "S" || event.code === "KeyS");
+
+    if (isAltP || isCmdShiftP) {
+      const handled = sanitizeActiveField("semantic_placeholder");
+      if (handled) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    } else if (isAltS) {
+      const handled = sanitizeActiveField("synthetic_dummy");
+      if (handled) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }
+  },
+  true,
+);
 
 let activeHintFinding: HTMLElement | null = null;
 let noticeTimeout = 0;
@@ -389,33 +882,6 @@ document.addEventListener('pointerout', event => {
     activeHintFinding = null;
     hint.classList.remove('show');
   }
-}, true);
-
-document.addEventListener('paste', event => {
-  const field = event.target;
-  if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
-  const value = event.clipboardData?.getData('text/plain') || '';
-  if (!value) return;
-  const matches = detect(value, finding => categoryEnabled(finding.type));
-  if (matches.length) showNotice(`Sensitive paste: ${[...new Set(matches.map(item => item.type))].join(', ')}. Review before submitting.`, field.getBoundingClientRect());
-  void analyzeWithAi(value.slice(0, 5000)).then(({ findings, provider }) => {
-    const visible = findings.filter(item => categoryEnabled(item.type, item.category));
-    if (visible.length) showNotice(`${provider === 'cloud' ? 'Cloud fallback' : 'Local AI'} also found: ${[...new Set(visible.map(item => item.type))].join(', ')}. Review before submitting.`, field.getBoundingClientRect());
-  });
-}, true);
-
-document.addEventListener('input', event => {
-  const field = event.target;
-  if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
-  clearTimeout(fieldTimer);
-  fieldTimer = window.setTimeout(() => {
-    if (field instanceof HTMLInputElement && field.type === 'password' && enabledCategories.password) {
-      showNotice('Password field: keep this value private.', field.getBoundingClientRect());
-      return;
-    }
-    const matches = detect(field.value, finding => categoryEnabled(finding.type));
-    if (matches.length) showNotice(`Sensitive field: ${[...new Set(matches.map(item => item.type))].join(', ')}.`, field.getBoundingClientRect());
-  }, 250);
 }, true);
 
 type AiFinding = { text: string; type: string; severity: 'high' | 'medium'; category?: FindingCategory };

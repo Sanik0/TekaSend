@@ -6,29 +6,15 @@
  * Satisfies PRD Section 7 (Local-AI & Privacy Requirements: 100% on-device).
  */
 
-import { pipeline, env } from '@huggingface/transformers';
 import { ModelLifecycleState, ModelProgressPayload, ModelStatus } from '../types.js';
-
-// All executable ONNX assets and model files are packaged with the extension.
-// The browser never fetches remote executable code or model weights.
-if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
-  env.allowLocalModels = true;
-  env.allowRemoteModels = false;
-  env.localModelPath = chrome.runtime.getURL('models/');
-  env.useWasmCache = false;
-  const wasm = env.backends.onnx.wasm;
-  if (!wasm) throw new Error('ONNX WebAssembly backend is unavailable.');
-  wasm.numThreads = 1;
-  wasm.wasmPaths = {
-    mjs: chrome.runtime.getURL('ort/ort-wasm-simd-threaded.asyncify.mjs'),
-    wasm: chrome.runtime.getURL('ort/ort-wasm-simd-threaded.asyncify.wasm')
-  };
-}
 
 export type ProgressCallback = (payload: ModelProgressPayload) => void;
 
-// Type alias for token classification pipeline
-export type TokenClassificationPipeline = Awaited<ReturnType<typeof pipeline<'token-classification'>>>;
+// Generic TokenClassificationPipeline function type
+export type TokenClassificationPipeline = (
+  text: string,
+  options?: Record<string, unknown>
+) => Promise<unknown>;
 
 export class ModelPipelineManager {
   private static instance: ModelPipelineManager | null = null;
@@ -97,7 +83,19 @@ export class ModelPipelineManager {
 
     this.initializationPromise = (async () => {
       try {
+        const { pipeline, env } = await import('@huggingface/transformers');
         if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
+          env.allowLocalModels = true;
+          env.allowRemoteModels = false;
+          env.localModelPath = chrome.runtime.getURL('models/');
+          env.useWasmCache = false;
+          const wasm = env.backends.onnx.wasm;
+          if (!wasm) throw new Error('ONNX WebAssembly backend is unavailable.');
+          wasm.numThreads = 1;
+          wasm.wasmPaths = {
+            mjs: chrome.runtime.getURL('ort/ort-wasm-simd-threaded.asyncify.mjs'),
+            wasm: chrome.runtime.getURL('ort/ort-wasm-simd-threaded.asyncify.wasm')
+          };
           const modelConfig = chrome.runtime.getURL(`models/${this.modelId}/config.json`);
           const response = await fetch(modelConfig);
           if (!response.ok) {
@@ -118,10 +116,10 @@ export class ModelPipelineManager {
           }
         });
 
-        this.pipelineInstance = pipe;
+        this.pipelineInstance = pipe as unknown as TokenClassificationPipeline;
         this.currentState = 'ready';
         this.currentProgress = 100;
-        return pipe;
+        return this.pipelineInstance;
       } catch (error) {
         this.currentState = 'error';
         this.lastErrorMessage = error instanceof Error ? error.message : 'Failed to load on-device AI model';
@@ -137,8 +135,9 @@ export class ModelPipelineManager {
    * Disposes the cached model instance to free browser memory if needed.
    */
   public async dispose(): Promise<void> {
-    if (this.pipelineInstance && typeof (this.pipelineInstance as { dispose?: () => Promise<void> }).dispose === 'function') {
-      await (this.pipelineInstance as { dispose: () => Promise<void> }).dispose();
+    const instance = this.pipelineInstance as unknown as { dispose?: () => Promise<void> } | null;
+    if (instance && typeof instance.dispose === 'function') {
+      await instance.dispose();
     }
     this.pipelineInstance = null;
     this.initializationPromise = null;

@@ -11,14 +11,14 @@ const nonPersonStarts = new Set([
   'This', 'That', 'These', 'Those', 'The', 'Our', 'Your', 'Contact', 'Sample',
   'Example', 'Visible', 'Synthetic', 'Personal', 'Credit', 'Private', 'Secret',
   'Email', 'Phone', 'Test', 'New', 'User', 'Local', 'Full', 'First', 'Last',
-  'Default', 'Hide', 'Linked', 'Demo', 'TekaSend', 'Dear', 'Mr', 'Mrs', 'Ms',
+  'Default', 'Hide', 'Linked', 'Demo', 'TekaSend', 'OpenAI', 'My', 'Dear', 'Mr', 'Mrs', 'Ms',
   'Dr', 'Prof'
 ]);
 const nonPersonEnds = new Set([
   'Street', 'Road', 'Avenue', 'Boulevard', 'City', 'State', 'County', 'University',
   'Company', 'Bank', 'Department', 'Team', 'Information', 'Number', 'Address',
   'Token', 'Key', 'Password', 'Page', 'Name', 'Text', 'Data', 'Settings', 'Account',
-  'Card', 'Devices', 'System', 'Mode', 'Effect'
+  'Card', 'Devices', 'System', 'Mode', 'Effect', 'API'
 ]);
 
 function looksLikePerson(text: string): boolean {

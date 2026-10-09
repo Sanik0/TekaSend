@@ -36,8 +36,8 @@ The deterministic local rules work without downloading the model. The **Scan Act
 - Turn off **Show hover tips** under Appearance to hide hints over detected text. Input warnings remain available.
 - **Blur** uses soft focus. **Spoiler** uses floating particles that follow wrapped lines. On systems that request reduced motion, the particles stay still. Images use the webpage's normal click and context-menu behavior.
 - Dummy text uses different characters while keeping the same visible character count. The replacement has no highlight background.
-- Native input and textarea controls cannot display per-substring highlights. They show a nearby warning when sensitive text is entered or pasted.
-- This is visual masking for the current page. It does **not** stop the site from reading data already entered or submitted, nor does it sanitize screenshots of other tabs, network requests, or the page's own JavaScript state.
+- Input fields, textareas, and editable prompts show overlay highlights and a nearby indicator when sensitive text is entered or pasted. The indicator can replace detected values with placeholders or scrambled text and restore them; `Alt+P` applies placeholders and `Alt+S` scrambles the active field.
+- Page-text masking is visual. Input repair changes the field value, but the site may already have read the original. TekaSend does **not** sanitize other tabs, network requests, or the page's own JavaScript state.
 - The content script runs on ordinary `http`, `https`, and permitted `file` pages, including matching frames and page-created `about:blank`/`blob:` frames. It also checks text in code blocks. Chrome internal pages and other protected browser pages remain unavailable to content scripts. Reload any already-open webpage after installation or an extension update.
 
 ## Development
