@@ -1,4 +1,4 @@
-# Privacy Lens
+# TekaSend
 
 A Chrome Manifest V3 extension that highlights likely sensitive text, offers visual masking actions, and warns when sensitive text is pasted or typed into fields.
 

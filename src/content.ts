@@ -38,7 +38,7 @@ shadow.append(uiStyle);
 const panel = document.createElement('div');
 panel.className = 'panel';
 panel.setAttribute('role', 'dialog');
-panel.setAttribute('aria-label', 'Privacy Lens actions');
+panel.setAttribute('aria-label', 'TekaSend actions');
 const title = document.createElement('div'); title.className = 'title';
 const buttons = document.createElement('div'); buttons.className = 'buttons';
 panel.append(title, buttons);
@@ -220,7 +220,7 @@ async function analyzeWithAi(text: string): Promise<{ text: string; type: string
   if (!settings.aiEnabled || !settings.apiKey) { aiError = 'Enable AI and save an API key first.'; return []; }
   try {
     const response = await chrome.runtime.sendMessage({ kind: 'AI_ANALYZE', text });
-    if (!response.ok) { aiError = response.error || 'AI request failed.'; console.warn('Privacy Lens:', aiError); return []; }
+    if (!response.ok) { aiError = response.error || 'AI request failed.'; console.warn('TekaSend:', aiError); return []; }
     aiError = '';
     return response.findings || [];
   } catch { aiError = 'Could not reach the extension background worker.'; return []; }

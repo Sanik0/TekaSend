@@ -1,9 +1,9 @@
 type AiFinding = { text: string; type: string; severity: 'high' | 'medium' };
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({ id: 'privacy-blur', title: 'Privacy Lens: Blur selection or image', contexts: ['selection', 'image'] });
-  chrome.contextMenus.create({ id: 'privacy-dummy', title: 'Privacy Lens: Replace with dummy', contexts: ['selection', 'image'] });
-  chrome.contextMenus.create({ id: 'privacy-redact', title: 'Privacy Lens: Redact', contexts: ['selection', 'image'] });
+  chrome.contextMenus.create({ id: 'privacy-blur', title: 'TekaSend: Blur selection or image', contexts: ['selection', 'image'] });
+  chrome.contextMenus.create({ id: 'privacy-dummy', title: 'TekaSend: Replace with dummy', contexts: ['selection', 'image'] });
+  chrome.contextMenus.create({ id: 'privacy-redact', title: 'TekaSend: Redact', contexts: ['selection', 'image'] });
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
