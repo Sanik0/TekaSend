@@ -1,8 +1,9 @@
 import { detect, type Finding } from './detect';
 
-type Action = 'blur' | 'dummy' | 'redact' | 'restore';
+type Action = 'blur' | 'dummy' | 'redact' | 'restore' | 'removeHighlight';
 type Target = { kind: 'text'; element: HTMLElement } | { kind: 'image'; element: HTMLImageElement } | { kind: 'selection'; range: Range } | { kind: 'field'; element: HTMLInputElement | HTMLTextAreaElement };
 const originalText = new WeakMap<HTMLElement, DocumentFragment>();
+const ignoredText = new WeakSet<Text>();
 const originalImages = new WeakMap<HTMLImageElement, { src: string; srcset: string; alt: string; filter: string }>();
 let currentTarget: Target | null = null;
 let pendingSelection: Range | null = null;
@@ -69,6 +70,7 @@ notice.append(noticeBrand, noticeCopy); shadow.append(notice);
 const hint = document.createElement('div'); hint.className = 'bubble hint'; hint.setAttribute('role', 'tooltip');
 const hintCopy = document.createElement('div'); hintCopy.className = 'copy';
 hint.append(panelBrand.cloneNode(true), hintCopy); shadow.append(hint);
+let activeHintFinding: HTMLElement | null = null;
 let noticeTimeout = 0;
 
 function placeBubble(element: HTMLElement, rect: DOMRect) {
@@ -94,14 +96,19 @@ function showNotice(message: string, rect: DOMRect) {
 
 function showMenu(target: Target, rect: DOMRect, label: string) {
   currentTarget = target;
+  activeHintFinding = null;
   hint.classList.remove('show');
   title.textContent = label.replace(/ · click for actions$/, '');
   buttons.replaceChildren();
-  const actions: Action[] = target.kind === 'selection' || target.kind === 'field' ? ['blur', 'dummy', 'redact'] : ['blur', 'dummy', 'redact', 'restore'];
+  const actions: Action[] = target.kind === 'selection' || target.kind === 'field'
+    ? ['blur', 'dummy', 'redact']
+    : target.kind === 'text' && !target.element.classList.contains('pl-manual')
+      ? ['blur', 'dummy', 'redact', 'removeHighlight']
+      : ['blur', 'dummy', 'redact', 'restore'];
   for (const action of actions) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = action === 'dummy' ? 'Dummy text' : action[0].toUpperCase() + action.slice(1);
+    button.textContent = action === 'dummy' ? 'Dummy text' : action === 'removeHighlight' ? 'Remove highlight' : action[0].toUpperCase() + action.slice(1);
     button.addEventListener('click', () => { if (currentTarget) applyAction(currentTarget, action); hideMenu(); });
     buttons.append(button);
   }
@@ -110,6 +117,7 @@ function showMenu(target: Target, rect: DOMRect, label: string) {
 function hideMenu() { panel.classList.remove('show'); currentTarget = null; }
 
 function findingLabel(element: HTMLElement) {
+  if (element.classList.contains('pl-manual')) return 'Manually masked text';
   const level = element.classList.contains('pl-medium') ? 'Personal information' : 'Confidential information';
   return `${level}: ${element.getAttribute('data-pl-type') || 'text'}`;
 }
@@ -126,7 +134,7 @@ function createFinding(finding: Pick<Finding, 'type' | 'severity'>, text: string
 
 function eligible(node: Text): boolean {
   const parent = node.parentElement;
-  return !!parent && !!node.nodeValue?.trim() && !parent.closest('script,style,noscript,textarea,input,select,option,code,pre,[contenteditable],.pl-finding,[data-privacy-lens-ui]') && getComputedStyle(parent).display !== 'none';
+  return !!parent && !ignoredText.has(node) && !!node.nodeValue?.trim() && !parent.closest('script,style,noscript,textarea,input,select,option,code,pre,[contenteditable],.pl-finding,[data-privacy-lens-ui]') && getComputedStyle(parent).display !== 'none';
 }
 
 function wrapNode(node: Text, findings: Finding[]): void {
@@ -187,11 +195,21 @@ function applyAction(target: Target, action: Action) {
   if (target.kind === 'selection') {
     const range = target.range;
     if (range.collapsed || !range.commonAncestorContainer.isConnected) return;
-    element = document.createElement('span'); element.className = 'pl-finding pl-high'; element.setAttribute('data-pl-type', 'Manual selection');
+    element = document.createElement('span'); element.className = 'pl-finding pl-manual'; element.setAttribute('data-pl-type', 'Manual selection');
     const original = range.extractContents(); originalText.set(element, original.cloneNode(true) as DocumentFragment); element.append(original); range.insertNode(element);
+    pendingSelection = null;
     getSelection()?.removeAllRanges();
   } else element = target.element;
   const original = originalText.get(element);
+  if (action === 'removeHighlight') {
+    if (original) {
+      const restored = original.cloneNode(true) as DocumentFragment;
+      const walker = document.createTreeWalker(restored, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) ignoredText.add(walker.currentNode as Text);
+      element.replaceWith(restored);
+    }
+    return;
+  }
   if (action === 'restore') { if (original) element.replaceWith(original.cloneNode(true)); return; }
   element.classList.remove('pl-blur', 'pl-masked');
   if (original) element.replaceChildren(original.cloneNode(true));
@@ -210,16 +228,44 @@ document.addEventListener('click', event => {
   hideMenu();
 }, true);
 
-document.addEventListener('pointerover', event => {
+function updateFindingHint(event: PointerEvent) {
   const finding = event.target instanceof Element ? event.target.closest('.pl-finding') : null;
-  if (!(finding instanceof HTMLElement) || panel.classList.contains('show')) return;
-  hintCopy.textContent = `${finding.getAttribute('data-pl-type') || 'Sensitive text'} detected. Click for actions.`;
+  if (!(finding instanceof HTMLElement)) {
+    if (activeHintFinding) { activeHintFinding = null; hint.classList.remove('show'); }
+    return;
+  }
+  if (panel.classList.contains('show')) return;
+  if (finding === activeHintFinding && hint.classList.contains('show')) return;
+  activeHintFinding = finding;
+  hintCopy.textContent = finding.classList.contains('pl-manual') ? 'Manually masked text. Click for actions.' : `${finding.getAttribute('data-pl-type') || 'Sensitive text'} detected. Click for actions.`;
   placeBubble(hint, finding.getBoundingClientRect());
+}
+
+document.addEventListener('pointerover', updateFindingHint, true);
+document.addEventListener('pointermove', updateFindingHint, true);
+
+function pointInsideSelection(range: Range, x: number, y: number) {
+  return Array.from(range.getClientRects()).some(rect => x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom);
+}
+
+document.addEventListener('pointermove', event => {
+  if (!pendingSelection || panel.classList.contains('show') || !pendingSelection.commonAncestorContainer.isConnected) return;
+  if (pointInsideSelection(pendingSelection, event.clientX, event.clientY)) {
+    showMenu({ kind: 'selection', range: pendingSelection.cloneRange() }, pendingSelection.getBoundingClientRect(), 'Selected text');
+  }
+}, true);
+
+document.addEventListener('pointerdown', event => {
+  if (event.target instanceof Element && event.target.closest('[data-privacy-lens-ui]')) return;
+  if (pendingSelection && !pointInsideSelection(pendingSelection, event.clientX, event.clientY)) pendingSelection = null;
 }, true);
 
 document.addEventListener('pointerout', event => {
   const finding = event.target instanceof Element ? event.target.closest('.pl-finding') : null;
-  if (finding && (!(event.relatedTarget instanceof Node) || !finding.contains(event.relatedTarget))) hint.classList.remove('show');
+  if (finding && (!(event.relatedTarget instanceof Node) || !finding.contains(event.relatedTarget))) {
+    activeHintFinding = null;
+    hint.classList.remove('show');
+  }
 }, true);
 
 document.addEventListener('contextmenu', event => {
@@ -235,11 +281,11 @@ document.addEventListener('mouseup', event => {
     showMenu({ kind: 'field', element: active }, active.getBoundingClientRect(), 'Selected field text'); return;
   }
   const selection = getSelection();
-  if (!selection || selection.isCollapsed || !selection.rangeCount || !selection.toString().trim()) return;
+  if (!selection || selection.isCollapsed || !selection.rangeCount || !selection.toString().trim()) { pendingSelection = null; return; }
   const range = selection.getRangeAt(0).cloneRange();
   if (range.commonAncestorContainer.parentElement?.closest('[data-privacy-lens-ui]')) return;
   pendingSelection = range.cloneRange();
-  showMenu({ kind: 'selection', range }, range.getBoundingClientRect(), 'Selected text');
+  hideMenu();
 });
 
 document.addEventListener('paste', event => {

@@ -21,7 +21,7 @@ Open the extension popup, paste **your own OpenAI API key**, enable AI analysis,
 ## Behavior and limits
 
 - Red highlights: passwords, key formats, bearer tokens, private key headers. Yellow: emails and Philippine mobile numbers. These are heuristics and can miss secrets or flag examples.
-- Click a match to **Blur**, replace with **Dummy text**, **Redact**, or **Restore**. Select other page text for manual actions. Left click an image for the same actions. The image feature masks the entire image; it does not inspect text inside images.
+- Click a detected match to **Blur**, replace with **Dummy text**, **Redact**, or **Remove highlight**. A removed highlight stays off for that text node until the page replaces it or reloads. Select other page text and hover over the selection for manual actions; manual masks have **Restore**. Left click an image for masking actions and **Restore**. The image feature masks the entire image; it does not inspect text inside images.
 - Native input and textarea controls cannot display per-substring highlights. They show a nearby warning instead. On a field, Blur affects the whole control; replacement and redaction affect the selected characters.
 - This is visual masking for the current page. It does **not** stop the site from reading data already entered or submitted, nor does it sanitize screenshots of other tabs, network requests, or the page's own JavaScript state.
 - Chrome blocks content scripts on its internal pages and some protected pages. Reload a normal `http` or `https` page after installation.
