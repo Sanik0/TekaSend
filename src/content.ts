@@ -31,33 +31,65 @@ document.documentElement.append(host);
 const shadow = host.attachShadow({ mode: 'closed' });
 const uiStyle = document.createElement('style');
 uiStyle.textContent = `
-  *{box-sizing:border-box} .panel{position:fixed;display:none;min-width:210px;max-width:300px;background:#151a27;color:#fff;border:1px solid #424a62;border-radius:10px;box-shadow:0 12px 35px #0006;padding:10px;font:13px system-ui;pointer-events:auto}
-  .panel.show{display:block}.title{font-weight:700;margin:0 0 7px}.buttons{display:flex;flex-wrap:wrap;gap:6px}button{background:#30394e;color:white;border:1px solid #63708d;border-radius:6px;padding:6px 8px;cursor:pointer;font:12px system-ui}button:hover{background:#425373}.notice{position:fixed;display:none;max-width:310px;background:#fff4d7;color:#493300;border:1px solid #d49400;border-radius:8px;box-shadow:0 9px 25px #0004;padding:9px 11px;font:12px system-ui;pointer-events:none}.notice.show{display:block}
+  * { box-sizing:border-box; }
+  .bubble { position:fixed; display:none; width:min(310px, calc(100vw - 16px)); padding:19px 21px 20px; background:#3d3a48; color:#f8f7fb; border-radius:17px; box-shadow:0 10px 26px #24212e3d; font:13px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  .bubble.show { display:block; }
+  .bubble::after { content:""; position:absolute; left:var(--pointer-x, 50%); bottom:-10px; transform:translateX(-50%); border-left:10px solid transparent; border-right:10px solid transparent; border-top:11px solid #3d3a48; }
+  .bubble.below::after { top:-10px; bottom:auto; border-top:0; border-bottom:11px solid #3d3a48; }
+  .brand { display:flex; align-items:center; gap:8px; margin-bottom:6px; color:#fff; font-size:13px; font-weight:700; }
+  .brand-icon { display:grid; place-items:center; width:19px; height:19px; border:2px solid #a9a5ff; border-radius:50%; color:#b8b4ff; font-size:12px; font-weight:750; line-height:1; }
+  .copy { color:#dedbe6; overflow-wrap:anywhere; }
+  .panel { pointer-events:auto; }
+  .buttons { display:flex; flex-wrap:wrap; gap:7px; margin-top:14px; }
+  button { background:#555160; color:#fff; border:1px solid #706b7b; border-radius:7px; padding:7px 10px; cursor:pointer; font:12px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  button:hover,button:focus-visible { background:#696473; outline:2px solid #a9a5ff; outline-offset:1px; }
+  .notice { pointer-events:none; }
 `;
 shadow.append(uiStyle);
 const panel = document.createElement('div');
-panel.className = 'panel';
+panel.className = 'bubble panel';
 panel.setAttribute('role', 'dialog');
 panel.setAttribute('aria-label', 'TekaSend actions');
-const title = document.createElement('div'); title.className = 'title';
+const panelBrand = document.createElement('div'); panelBrand.className = 'brand';
+const panelIcon = document.createElement('span'); panelIcon.className = 'brand-icon'; panelIcon.textContent = 'i';
+panelBrand.append(panelIcon, document.createTextNode('TekaSend'));
+const title = document.createElement('div'); title.className = 'copy';
 const buttons = document.createElement('div'); buttons.className = 'buttons';
-panel.append(title, buttons);
+panel.append(panelBrand, title, buttons);
 shadow.append(panel);
-const notice = document.createElement('div'); notice.className = 'notice'; notice.setAttribute('role', 'status'); shadow.append(notice);
+const notice = document.createElement('div'); notice.className = 'bubble notice'; notice.setAttribute('role', 'status');
+const noticeBrand = panelBrand.cloneNode(true);
+const noticeCopy = document.createElement('div'); noticeCopy.className = 'copy';
+notice.append(noticeBrand, noticeCopy); shadow.append(notice);
+const hint = document.createElement('div'); hint.className = 'bubble notice'; hint.setAttribute('role', 'tooltip');
+const hintCopy = document.createElement('div'); hintCopy.className = 'copy';
+hint.append(panelBrand.cloneNode(true), hintCopy); shadow.append(hint);
 let noticeTimeout = 0;
 
+function placeBubble(element: HTMLElement, rect: DOMRect) {
+  element.classList.add('show');
+  const { width, height } = element.getBoundingClientRect();
+  const center = rect.left + rect.width / 2;
+  const left = Math.max(8, Math.min(center - width / 2, innerWidth - width - 8));
+  const above = rect.top - height - 18 >= 8 || rect.bottom + height + 18 > innerHeight - 8;
+  const top = above ? Math.max(8, rect.top - height - 18) : Math.max(8, Math.min(rect.bottom + 18, innerHeight - height - 8));
+  element.classList.toggle('below', !above);
+  element.style.left = `${left}px`;
+  element.style.top = `${top}px`;
+  element.style.setProperty('--pointer-x', `${Math.max(22, Math.min(width - 22, center - left))}px`);
+}
+
 function showNotice(message: string, rect: DOMRect) {
-  notice.textContent = message;
-  notice.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - 320))}px`;
-  notice.style.top = `${Math.max(8, Math.min(rect.bottom + 6, innerHeight - 85))}px`;
-  notice.classList.add('show');
+  noticeCopy.textContent = message;
+  placeBubble(notice, rect);
   clearTimeout(noticeTimeout);
   noticeTimeout = window.setTimeout(() => notice.classList.remove('show'), 6500);
 }
 
 function showMenu(target: Target, rect: DOMRect, label: string) {
   currentTarget = target;
-  title.textContent = label;
+  hint.classList.remove('show');
+  title.textContent = label.replace(/ · click for actions$/, '');
   buttons.replaceChildren();
   const actions: Action[] = target.kind === 'selection' || target.kind === 'field' ? ['blur', 'dummy', 'redact'] : ['blur', 'dummy', 'redact', 'restore'];
   for (const action of actions) {
@@ -67,17 +99,19 @@ function showMenu(target: Target, rect: DOMRect, label: string) {
     button.addEventListener('click', () => { if (currentTarget) applyAction(currentTarget, action); hideMenu(); });
     buttons.append(button);
   }
-  panel.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - 315))}px`;
-  panel.style.top = `${Math.max(8, Math.min(rect.bottom + 8, innerHeight - 90))}px`;
-  panel.classList.add('show');
+  placeBubble(panel, rect);
 }
 function hideMenu() { panel.classList.remove('show'); currentTarget = null; }
+
+function findingLabel(element: HTMLElement) {
+  const level = element.classList.contains('pl-medium') ? 'Personal information' : 'Confidential information';
+  return `${level}: ${element.getAttribute('data-pl-type') || 'text'}`;
+}
 
 function createFinding(finding: Pick<Finding, 'type' | 'severity'>, text: string): HTMLElement {
   const span = document.createElement('span');
   span.className = `pl-finding pl-${finding.severity}`;
   span.setAttribute('data-pl-type', finding.type);
-  span.title = `${finding.severity === 'high' ? 'Confidential' : 'Personal'}: ${finding.type} · click for actions`;
   span.textContent = text;
   const fragment = document.createDocumentFragment(); fragment.append(document.createTextNode(text));
   originalText.set(span, fragment);
@@ -165,9 +199,21 @@ document.addEventListener('click', event => {
   const target = event.target;
   if (!(target instanceof Element) || target.closest('[data-privacy-lens-ui]')) return;
   const finding = target.closest('.pl-finding');
-  if (finding instanceof HTMLElement) { event.preventDefault(); event.stopPropagation(); showMenu({ kind: 'text', element: finding }, finding.getBoundingClientRect(), finding.title || 'Sensitive text'); return; }
+  if (finding instanceof HTMLElement) { event.preventDefault(); event.stopPropagation(); hint.classList.remove('show'); showMenu({ kind: 'text', element: finding }, finding.getBoundingClientRect(), findingLabel(finding)); return; }
   if (target instanceof HTMLImageElement) { event.preventDefault(); event.stopPropagation(); pendingImage = target; showMenu({ kind: 'image', element: target }, target.getBoundingClientRect(), 'Image actions'); return; }
   hideMenu();
+}, true);
+
+document.addEventListener('pointerover', event => {
+  const finding = event.target instanceof Element ? event.target.closest('.pl-finding') : null;
+  if (!(finding instanceof HTMLElement) || panel.classList.contains('show')) return;
+  hintCopy.textContent = `${findingLabel(finding)}. Click for masking options.`;
+  placeBubble(hint, finding.getBoundingClientRect());
+}, true);
+
+document.addEventListener('pointerout', event => {
+  const finding = event.target instanceof Element ? event.target.closest('.pl-finding') : null;
+  if (finding && (!(event.relatedTarget instanceof Node) || !finding.contains(event.relatedTarget))) hint.classList.remove('show');
 }, true);
 
 document.addEventListener('contextmenu', event => {
