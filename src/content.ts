@@ -15,9 +15,9 @@ let aiSettingsTimer = 0;
 
 const style = document.createElement('style');
 style.textContent = `
-  .pl-finding { cursor:pointer!important; border-radius:3px!important; box-decoration-break:clone!important; -webkit-box-decoration-break:clone!important; }
-  .pl-finding.pl-high { background:#ffb4b4!important; color:#391113!important; box-shadow:0 0 0 1px #d94242!important; }
-  .pl-finding.pl-medium { background:#ffe9a0!important; color:#4a3600!important; box-shadow:0 0 0 1px #d69a08!important; }
+  .pl-finding { cursor:pointer!important; border:none!important; border-radius:0!important; box-shadow:none!important; box-decoration-break:clone!important; -webkit-box-decoration-break:clone!important; }
+  .pl-finding.pl-high { background:#ffd8dc!important; color:#4a1b24!important; }
+  .pl-finding.pl-medium { background:#fff0b8!important; color:#514000!important; }
   .pl-finding.pl-blur { filter:blur(5px)!important; user-select:none!important; }
   .pl-finding.pl-blur:hover { filter:blur(5px)!important; }
   .pl-finding.pl-masked { background:#191d27!important; color:white!important; padding:0 3px!important; }
