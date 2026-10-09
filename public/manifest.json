@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Privacy Lens",
+  "version": "0.1.0",
+  "description": "Find and visually mask sensitive information on web pages.",
+  "permissions": ["storage", "contextMenus"],
+  "host_permissions": ["https://api.openai.com/*"],
+  "action": { "default_popup": "popup.html", "default_title": "Privacy Lens" },
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [{ "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle", "all_frames": false }]
+}

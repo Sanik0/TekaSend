@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Privacy Lens</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <header><div class="logo">◉</div><div><h1>Privacy Lens</h1><p>Find and mask sensitive details</p></div></header>
+  <section class="legend"><span class="red">High sensitivity</span><span class="yellow">Personal information</span></section>
+  <section><h2>AI fallback</h2><p>Local rules always run. Enable AI to send up to 5,000 characters from each page and pasted text to OpenAI for additional detection.</p>
+    <label class="switch"><input id="aiEnabled" type="checkbox"> Enable OpenAI analysis</label>
+    <label for="apiKey">OpenAI API key</label><div class="keyrow"><input id="apiKey" type="password" placeholder="sk-…" autocomplete="off"><button id="toggleKey" type="button" aria-label="Show API key">Show</button></div>
+    <button id="save" class="primary" type="button">Save settings</button><button id="clear" type="button">Remove key</button>
+    <p id="status" role="status"></p>
+  </section>
+  <section><h2>Current page</h2><button id="scan" type="button">Run AI scan now</button><p class="hint">Click a highlighted match or an image for actions. Select text to mask it manually.</p></section>
+  <footer>Demo data only. Visual masking does not remove information already received by a website.</footer>
+  <script src="popup.js"></script>
+</body></html>
