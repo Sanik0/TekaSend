@@ -32,18 +32,23 @@ const shadow = host.attachShadow({ mode: 'closed' });
 const uiStyle = document.createElement('style');
 uiStyle.textContent = `
   * { box-sizing:border-box; }
-  .bubble { position:fixed; display:none; width:min(310px, calc(100vw - 16px)); padding:19px 21px 20px; background:#3d3a48; color:#f8f7fb; border-radius:17px; box-shadow:0 10px 26px #24212e3d; font:13px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-  .bubble.show { display:block; }
+  .bubble { position:fixed; width:min(310px, calc(100vw - 16px)); padding:19px 21px 20px; background:#3d3a48; color:#f8f7fb; border-radius:17px; box-shadow:0 10px 26px #24212e3d; font:13px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; visibility:hidden; opacity:0; transform:translateY(var(--enter-y, 6px)) scale(.98); transition:opacity 160ms ease,transform 220ms cubic-bezier(.2,.8,.2,1),visibility 0s linear 220ms; pointer-events:none; }
+  .bubble.below { --enter-y:-6px; }
+  .bubble.show { visibility:visible; opacity:1; transform:translateY(0) scale(1); transition-delay:0s; }
   .bubble::after { content:""; position:absolute; left:var(--pointer-x, 50%); bottom:-10px; transform:translateX(-50%); border-left:10px solid transparent; border-right:10px solid transparent; border-top:11px solid #3d3a48; }
   .bubble.below::after { top:-10px; bottom:auto; border-top:0; border-bottom:11px solid #3d3a48; }
   .brand { display:flex; align-items:center; gap:8px; margin-bottom:6px; color:#fff; font-size:13px; font-weight:700; }
   .brand-icon { display:grid; place-items:center; width:19px; height:19px; border:2px solid #a9a5ff; border-radius:50%; color:#b8b4ff; font-size:12px; font-weight:750; line-height:1; }
   .copy { color:#dedbe6; overflow-wrap:anywhere; }
-  .panel { pointer-events:auto; }
+  .panel.show { pointer-events:auto; }
   .buttons { display:flex; flex-wrap:wrap; gap:7px; margin-top:14px; }
-  button { background:#555160; color:#fff; border:1px solid #706b7b; border-radius:7px; padding:7px 10px; cursor:pointer; font:12px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-  button:hover,button:focus-visible { background:#696473; outline:2px solid #a9a5ff; outline-offset:1px; }
+  button { background:#555160; color:#fff; border:1px solid #706b7b; border-radius:7px; padding:7px 10px; cursor:pointer; font:12px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; transition:background-color 160ms ease,transform 160ms ease; }
+  button:hover,button:focus-visible { background:#696473; transform:translateY(-1px); outline:2px solid #a9a5ff; outline-offset:1px; }
   .notice { pointer-events:none; }
+  .hint { width:min(230px, calc(100vw - 16px)); padding:11px 13px 12px; border-radius:12px; font-size:11px; line-height:1.4; }
+  .hint .brand { font-size:11px; gap:6px; margin-bottom:4px; }
+  .hint .brand-icon { width:15px; height:15px; border-width:1.5px; font-size:10px; }
+  @media (prefers-reduced-motion:reduce) { .bubble,button { transition:none; } }
 `;
 shadow.append(uiStyle);
 const panel = document.createElement('div');
@@ -61,14 +66,15 @@ const notice = document.createElement('div'); notice.className = 'bubble notice'
 const noticeBrand = panelBrand.cloneNode(true);
 const noticeCopy = document.createElement('div'); noticeCopy.className = 'copy';
 notice.append(noticeBrand, noticeCopy); shadow.append(notice);
-const hint = document.createElement('div'); hint.className = 'bubble notice'; hint.setAttribute('role', 'tooltip');
+const hint = document.createElement('div'); hint.className = 'bubble hint'; hint.setAttribute('role', 'tooltip');
 const hintCopy = document.createElement('div'); hintCopy.className = 'copy';
 hint.append(panelBrand.cloneNode(true), hintCopy); shadow.append(hint);
 let noticeTimeout = 0;
 
 function placeBubble(element: HTMLElement, rect: DOMRect) {
   element.classList.add('show');
-  const { width, height } = element.getBoundingClientRect();
+  const width = element.offsetWidth;
+  const height = element.offsetHeight;
   const center = rect.left + rect.width / 2;
   const left = Math.max(8, Math.min(center - width / 2, innerWidth - width - 8));
   const above = rect.top - height - 18 >= 8 || rect.bottom + height + 18 > innerHeight - 8;
@@ -207,7 +213,7 @@ document.addEventListener('click', event => {
 document.addEventListener('pointerover', event => {
   const finding = event.target instanceof Element ? event.target.closest('.pl-finding') : null;
   if (!(finding instanceof HTMLElement) || panel.classList.contains('show')) return;
-  hintCopy.textContent = `${findingLabel(finding)}. Click for masking options.`;
+  hintCopy.textContent = `${finding.getAttribute('data-pl-type') || 'Sensitive text'} detected. Click for actions.`;
   placeBubble(hint, finding.getBoundingClientRect());
 }, true);
 
