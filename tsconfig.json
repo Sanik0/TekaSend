@@ -7,7 +7,9 @@
     "strict": true,
     "noEmit": true,
     "types": ["chrome"],
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
   },
   "include": ["src/**/*.ts"]
 }

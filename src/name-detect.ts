@@ -1,73 +1,2140 @@
-export type NameMatch = { start: number; end: number; text: string };
+/**
+ * TekaSend AI Subsystem — Enhanced Restricted Person Name Detector
+ *
+ * Provides high-precision, restricted detection of personal names while preventing
+ * false positives on capitalized UI labels, locations, technical terms, organizations,
+ * temporal expressions, and consecutive title-case text.
+ * Satisfies PRD F1 (Data Awareness Notice - PII / Name Detection).
+ */
 
-// Capitalization alone is weak evidence: inbox subjects and buttons use title case too.
-const word = String.raw`\p{Lu}[\p{Ll}\p{M}]+(?:[’'-]\p{Lu}[\p{Ll}\p{M}]+)*`;
-const joiningWord = String.raw`(?:de|del|dela|da|di|dos|des|van|von|la|le)`;
-const fullName = String.raw`${word}(?:[ \t]+(?:${joiningWord}[ \t]+)?${word}){1,3}`;
-const fullNamePattern = new RegExp(String.raw`(?<![\p{L}\p{M}@])${fullName}(?![\p{L}\p{M}])`, 'gu');
-const nameLabelPattern = /\b(?:my[ \t]+name[ \t]+is|(?:full[ \t]+|first[ \t]+|last[ \t]+)?name[ \t]*(?::|=|is)|contact[ \t]+person[ \t]*(?::|=|is)|patient[ \t]*(?::|=|is)|recipient[ \t]*(?::|=|is)|dear[ \t]+|(?:mr|mrs|ms|dr|prof)\.[ \t]+)[ \t]*/gi;
-const explicitBeforePattern = /\b(?:my\s+name\s+is|(?:full\s+|first\s+|last\s+)?name\s*(?::|=|is)|contact\s+person\s*(?::|=|is)|patient\s*(?::|=|is)|recipient\s*(?::|=|is)|dear\s+|(?:mr|mrs|ms|dr|prof)\.\s+)\s*$/i;
-const nameAfterLabelPattern = new RegExp(String.raw`^${word}(?:[ \t]+(?:${joiningWord}[ \t]+)?${word}){0,3}(?![\p{L}\p{M}])`, 'u');
-const nameShapePattern = new RegExp(String.raw`^${word}(?:[ \t]+(?:${joiningWord}[ \t]+)?${word}){0,3}$`, 'u');
-const contextBeforePattern = /\b(?:met|emailed|called|contacted|introduced|interviewed|greeted|with|from|by|to)\s+$/i;
-const contextAfterPattern = /^\s+(?:met|said|wrote|replied|called|emailed|joined|spoke|reacted|posted)\b/i;
+export interface NameMatch {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+}
 
-// Common navigation, promotion, title, and organization words. An uncertain
-// candidate stays visible, even when that means missing a real name.
-const nonPersonWords = new Set([
-  'about', 'account', 'action', 'address', 'all', 'app', 'application', 'bank',
-  'button', 'campus', 'card', 'city', 'company', 'contact', 'customer', 'data',
-  'demo', 'department', 'devices', 'digest', 'email', 'example', 'feature',
-  'first', 'full', 'google', 'hide', 'information', 'in', 'key', 'labs', 'last',
-  'lead', 'linked', 'local', 'login', 'mode', 'name', 'new', 'news', 'number',
-  'open', 'page', 'password', 'personal', 'premium', 'private', 'product',
-  'profile', 'quora', 'road', 'sample', 'secret', 'settings', 'sign', 'signin',
-  'state', 'street', 'subscribe', 'system', 'team', 'test', 'text', 'this',
-  'token', 'try', 'university', 'user', 'visible', 'your'
+/**
+ * Standard Unicode capitalized word pattern (supports accented characters and hyphens/apostrophes).
+ * e.g., "Juan", "O'Connor", "Jean-Luc", "René"
+ */
+const WORD_PATTERN = String.raw`\p{Lu}[\p{Ll}\p{M}]+(?:[’'-]\p{Lu}?[\p{Ll}\p{M}]+)*`;
+
+/**
+ * Compound name particles (Filipino, Spanish, French, German, Dutch, Italian).
+ */
+const PARTICLE_PATTERN = String.raw`(?:de|del|dela|de\s+la|de\s+los|delos|da|di|dos|des|van|von|la|le|san|santa)`;
+
+/**
+ * Multi-word personal name candidate pattern (2 to 4 tokens).
+ */
+const FULL_NAME_PATTERN = String.raw`${WORD_PATTERN}(?:[ \t]+(?:${PARTICLE_PATTERN}[ \t]+)?${WORD_PATTERN}){1,3}`;
+
+const FULL_NAME_REGEX = new RegExp(
+  String.raw`(?<![\p{L}\p{M}0-9@_])${FULL_NAME_PATTERN}(?![\p{L}\p{M}0-9_])`,
+  "gu",
+);
+
+/**
+ * Explicit formal titles and honorifics.
+ */
+const TITLE_PREFIXES = String.raw`\b(?:mr|mrs|ms|miss|dr|prof|professor|engr|engineer|atty|attorney|judge|senator|gov|governor|mayor|hon|honorable|father|fr|sister|sr|pastor|rev|reverend|capt|captain|chief|sir|madam|madame|lady|lord)\.?\s+`;
+
+/**
+ * Explicit form fields, role headers, and data labels.
+ */
+const FORM_LABELS = String.raw`\b(?:my\s+name\s+is|(?:full\s+|first\s+|last\s+|middle\s+|given\s+|sur\s*)?name\s*(?::|=|is)|contact\s+person\s*(?::|=|is)|patient\s*(?::|=|is)|recipient\s*(?::|=|is)|client\s*(?::|=|is)|customer(?:\s+name)?\s*(?::|=|is)|employee(?:\s+name)?\s*(?::|=|is)|author\s*(?::|=|is)|writer\s*(?::|=|is)|speaker\s*(?::|=|is)|sender\s*(?::|=|is)|account\s+holder\s*(?::|=|is)|cardholder(?:\s+name)?\s*(?::|=|is)|user(?:\s+name)?\s*(?::|=|is)|doctor\s*(?::|=|is)|physician\s*(?::|=|is)|nurse\s*(?::|=|is)|attendee\s*(?::|=|is)|passenger\s*(?::|=|is)|witness\s*(?::|=|is)|attn\s*:\s*|attention\s*:\s*)[ \t]*`;
+
+/**
+ * Conversational greetings and sign-offs.
+ */
+const SALUTATIONS = String.raw`\b(?:dear|hi|hello|hey|greetings\s+to|thanks,|thank\s+you,|sincerely,|regards,|best\s+regards,|warm\s+regards,|yours\s+truly,|yours,|cheers,)[ \t]*`;
+
+/**
+ * Attribution and conversational lead-ins.
+ */
+const ATTRIBUTION_LEADINS = String.raw`\b(?:signed\s+by|approved\s+by|authored\s+by|written\s+by|created\s+by|reviewed\s+by|assigned\s+to|referred\s+by|supervised\s+by|managed\s+by|introduced\s+by|interviewed\s+by|meeting\s+with|met\s+with|talked\s+to|talking\s+to|spoke\s+with|speaking\s+with|chatted\s+with|emailed|called|messaged|contacted|greeted|met)[ \t]*`;
+
+/**
+ * Actions typically performed by a person immediately following their name.
+ */
+const PERSON_ACTIONS_AFTER =
+  /^\s+(?:said|says|wrote|writes|replied|replies|asked|asks|answered|answers|commented|comments|mentioned|mentions|stated|states|claimed|claims|announced|announces|signed|resigned|joined|leaves|left|worked|works|graduated|lives\s+in|moved\s+to|spoke|tweeted|posted)\b/i;
+
+/**
+ * Consolidated context regular expressions.
+ */
+const EXPLICIT_BEFORE_REGEX = new RegExp(
+  `(?:${FORM_LABELS}|${TITLE_PREFIXES}|${SALUTATIONS}|${ATTRIBUTION_LEADINS})\\s*$`,
+  "i",
+);
+
+const EXPLICIT_LABEL_GLOBAL_REGEX = new RegExp(
+  `(?:${FORM_LABELS}|${TITLE_PREFIXES}|${SALUTATIONS}|${ATTRIBUTION_LEADINS})`,
+  "gi",
+);
+
+const SINGLE_OR_MULTI_NAME_AFTER_LABEL = new RegExp(
+  String.raw`^${WORD_PATTERN}(?:[ \t]+(?:${PARTICLE_PATTERN}[ \t]+)?${WORD_PATTERN}){0,3}(?![\p{L}\p{M}0-9_])`,
+  "u",
+);
+
+const STRICT_NAME_SHAPE_REGEX = new RegExp(
+  String.raw`^${WORD_PATTERN}(?:[ \t]+(?:${PARTICLE_PATTERN}[ \t]+)?${WORD_PATTERN}){0,3}$`,
+  "u",
+);
+
+/**
+ * Curated list of common multicultural first names (English, Filipino, Hispanic, Asian, European, Global).
+ */
+const KNOWN_FIRST_NAMES: ReadonlySet<string> = new Set([
+  "aarav",
+  "aaron",
+  "abigail",
+  "adam",
+  "adrian",
+  "aiah",
+  "albert",
+  "alden",
+  "alex",
+  "alexander",
+  "alexandra",
+  "alexis",
+  "alfred",
+  "alice",
+  "alicia",
+  "althea",
+  "alvin",
+  "alyssa",
+  "amanda",
+  "amina",
+  "amy",
+  "ana",
+  "ananya",
+  "andrea",
+  "andres",
+  "andrew",
+  "angel",
+  "angela",
+  "angelica",
+  "angelo",
+  "anita",
+  "ann",
+  "anna",
+  "anthony",
+  "antonio",
+  "apollo",
+  "april",
+  "ariana",
+  "armand",
+  "arnold",
+  "arthur",
+  "ashley",
+  "austin",
+  "ava",
+  "barbara",
+  "bea",
+  "benjamin",
+  "bernard",
+  "beth",
+  "bianca",
+  "blessing",
+  "bobby",
+  "bradley",
+  "brandon",
+  "brian",
+  "bridget",
+  "bryan",
+  "cameron",
+  "carl",
+  "carlos",
+  "carmen",
+  "carol",
+  "caroline",
+  "casey",
+  "catherine",
+  "cecilia",
+  "cesar",
+  "charles",
+  "charlie",
+  "charlotte",
+  "chelsea",
+  "chen",
+  "chloe",
+  "chris",
+  "christian",
+  "christina",
+  "christine",
+  "christopher",
+  "clara",
+  "clarence",
+  "clark",
+  "claudia",
+  "colet",
+  "conrad",
+  "cristina",
+  "cyrus",
+  "daisy",
+  "dan",
+  "daniel",
+  "daniela",
+  "danielle",
+  "dante",
+  "daphne",
+  "david",
+  "dawn",
+  "dean",
+  "deborah",
+  "denise",
+  "dennis",
+  "derek",
+  "diana",
+  "diego",
+  "dina",
+  "dominic",
+  "donald",
+  "donna",
+  "doris",
+  "douglas",
+  "dylan",
+  "edgar",
+  "eduardo",
+  "edward",
+  "edwin",
+  "elaine",
+  "eleanor",
+  "elena",
+  "eli",
+  "elijah",
+  "elizabeth",
+  "ella",
+  "ellen",
+  "emily",
+  "emma",
+  "emmanuel",
+  "eric",
+  "erica",
+  "erik",
+  "esteban",
+  "ethan",
+  "eugene",
+  "eva",
+  "evelyn",
+  "faith",
+  "fatima",
+  "felix",
+  "ferdinand",
+  "fiona",
+  "florence",
+  "francis",
+  "francisco",
+  "frank",
+  "franklin",
+  "fred",
+  "frederick",
+  "gabriel",
+  "gabriela",
+  "gabrielle",
+  "gail",
+  "gary",
+  "geoffrey",
+  "george",
+  "gerald",
+  "gillian",
+  "gina",
+  "giselle",
+  "glen",
+  "glenn",
+  "gloria",
+  "grace",
+  "greg",
+  "gregory",
+  "gwen",
+  "hannah",
+  "harold",
+  "harper",
+  "harry",
+  "harvey",
+  "hazel",
+  "heather",
+  "hector",
+  "helen",
+  "henry",
+  "hiroshi",
+  "hope",
+  "howard",
+  "hugh",
+  "ian",
+  "ignacio",
+  "irene",
+  "iris",
+  "isaac",
+  "isabel",
+  "isabella",
+  "isaiah",
+  "ivan",
+  "jack",
+  "jackson",
+  "jacob",
+  "jacqueline",
+  "jade",
+  "jaime",
+  "james",
+  "jan",
+  "jane",
+  "janet",
+  "janice",
+  "janine",
+  "jared",
+  "jason",
+  "jayson",
+  "jean",
+  "jeffrey",
+  "jennifer",
+  "jenny",
+  "jeremy",
+  "jerome",
+  "jerry",
+  "jesse",
+  "jessica",
+  "ji-hoon",
+  "jill",
+  "jimmy",
+  "joan",
+  "joanna",
+  "jocelyn",
+  "joel",
+  "john",
+  "johnny",
+  "jomar",
+  "jonathan",
+  "jordan",
+  "jorge",
+  "jose",
+  "joseph",
+  "josephine",
+  "joshua",
+  "joy",
+  "joyce",
+  "juan",
+  "judith",
+  "judy",
+  "julia",
+  "julian",
+  "julie",
+  "justin",
+  "karen",
+  "karl",
+  "kate",
+  "katherine",
+  "kathleen",
+  "kathryn",
+  "katie",
+  "keith",
+  "kelly",
+  "ken",
+  "kenji",
+  "kenneth",
+  "kevin",
+  "kim",
+  "kimberly",
+  "kristen",
+  "kristine",
+  "kyle",
+  "lance",
+  "lara",
+  "larry",
+  "laura",
+  "lauren",
+  "laurence",
+  "lawrence",
+  "lea",
+  "leah",
+  "lee",
+  "leila",
+  "leo",
+  "leon",
+  "leonard",
+  "leslie",
+  "liam",
+  "lily",
+  "linda",
+  "lisa",
+  "logan",
+  "lorna",
+  "louis",
+  "louise",
+  "lucas",
+  "lucia",
+  "lucy",
+  "luis",
+  "luke",
+  "lydia",
+  "madeline",
+  "maine",
+  "maloi",
+  "manuel",
+  "marc",
+  "marco",
+  "marcos",
+  "marcus",
+  "margaret",
+  "maria",
+  "marian",
+  "marie",
+  "marilyn",
+  "marina",
+  "mario",
+  "marion",
+  "mark",
+  "marlene",
+  "martin",
+  "marvin",
+  "mary",
+  "mateo",
+  "matthew",
+  "maurice",
+  "maya",
+  "megan",
+  "melanie",
+  "melissa",
+  "mercedes",
+  "mia",
+  "michael",
+  "michelle",
+  "miguel",
+  "mikha",
+  "milo",
+  "min",
+  "miranda",
+  "monica",
+  "morgan",
+  "naomi",
+  "nathan",
+  "nathaniel",
+  "neil",
+  "nelson",
+  "nicholas",
+  "nicole",
+  "noah",
+  "noel",
+  "nora",
+  "norman",
+  "oliver",
+  "olivia",
+  "omar",
+  "oscar",
+  "owen",
+  "paige",
+  "pamela",
+  "paolo",
+  "patricia",
+  "patrick",
+  "paul",
+  "paula",
+  "pauline",
+  "pedro",
+  "peter",
+  "philip",
+  "phoebe",
+  "precious",
+  "princess",
+  "priya",
+  "rachel",
+  "rafael",
+  "ralph",
+  "ramon",
+  "randy",
+  "raymond",
+  "rebecca",
+  "regina",
+  "rene",
+  "renz",
+  "reuben",
+  "rey",
+  "rhoda",
+  "ricardo",
+  "richard",
+  "rita",
+  "robert",
+  "roberto",
+  "robin",
+  "rodrigo",
+  "roger",
+  "rohan",
+  "roland",
+  "ronald",
+  "rosa",
+  "rose",
+  "rosemary",
+  "ross",
+  "rowena",
+  "roy",
+  "ruben",
+  "ruby",
+  "russell",
+  "ruth",
+  "ryan",
+  "sabrina",
+  "sakura",
+  "salvador",
+  "sam",
+  "samantha",
+  "samuel",
+  "sandra",
+  "santiago",
+  "sara",
+  "sarah",
+  "scott",
+  "sean",
+  "sebastian",
+  "serena",
+  "seth",
+  "shane",
+  "sharon",
+  "sheena",
+  "sheryl",
+  "simon",
+  "sofia",
+  "solomon",
+  "sophia",
+  "sophie",
+  "stacey",
+  "stacy",
+  "stanley",
+  "stella",
+  "stephanie",
+  "stephen",
+  "steven",
+  "susan",
+  "suzanne",
+  "taro",
+  "teresa",
+  "terry",
+  "theo",
+  "theodore",
+  "theresa",
+  "thomas",
+  "timothy",
+  "tina",
+  "toby",
+  "todd",
+  "tom",
+  "tommy",
+  "tristan",
+  "tyler",
+  "vanessa",
+  "veronica",
+  "vicente",
+  "victor",
+  "victoria",
+  "vincent",
+  "violet",
+  "walter",
+  "warren",
+  "wayne",
+  "wei",
+  "wendy",
+  "wesley",
+  "william",
+  "winston",
+  "yolanda",
+  "yuki",
+  "yvonne",
+  "zachary",
+  "zoe",
 ]);
-const particles = new Set(['de', 'del', 'dela', 'da', 'di', 'dos', 'des', 'van', 'von', 'la', 'le']);
 
-export function hasPersonContext(source: string, start: number, end: number): boolean {
-  const before = source.slice(Math.max(0, start - 40), start);
-  const after = source.slice(end, Math.min(source.length, end + 24));
-  return explicitBeforePattern.test(before)
-    || contextBeforePattern.test(before)
-    || contextAfterPattern.test(after);
+/**
+ * Curated list of common multicultural surnames (Filipino, Hispanic, Asian, Western, Global).
+ */
+const KNOWN_SURNAMES: ReadonlySet<string> = new Set([
+  "adams",
+  "aguilar",
+  "allen",
+  "alvarez",
+  "anderson",
+  "andrada",
+  "aquino",
+  "arce",
+  "armstrong",
+  "bailey",
+  "baker",
+  "barnes",
+  "bautista",
+  "bell",
+  "bennett",
+  "bonifacio",
+  "bowen",
+  "brooks",
+  "brown",
+  "burns",
+  "caballero",
+  "campbell",
+  "carter",
+  "castillo",
+  "castro",
+  "chan",
+  "chavez",
+  "chen",
+  "choi",
+  "chua",
+  "clark",
+  "co",
+  "cole",
+  "collins",
+  "cook",
+  "cooper",
+  "coronel",
+  "cortez",
+  "cruz",
+  "david",
+  "davis",
+  "delacruz",
+  "delrosario",
+  "diaz",
+  "dixon",
+  "domingo",
+  "edwards",
+  "espino",
+  "espinosa",
+  "evans",
+  "fernandez",
+  "fisher",
+  "flores",
+  "foster",
+  "fuentes",
+  "garcia",
+  "gomez",
+  "gonzales",
+  "gonzalez",
+  "gray",
+  "green",
+  "guzman",
+  "hall",
+  "harris",
+  "harrison",
+  "hayes",
+  "hernandez",
+  "hill",
+  "howard",
+  "huang",
+  "hughes",
+  "ibarra",
+  "ignacio",
+  "jackson",
+  "jacinto",
+  "james",
+  "jenkins",
+  "jimenez",
+  "johnson",
+  "jones",
+  "jung",
+  "kelly",
+  "kim",
+  "king",
+  "lee",
+  "leon",
+  "lewis",
+  "lim",
+  "lin",
+  "liu",
+  "lopez",
+  "lucero",
+  "mabini",
+  "maceda",
+  "madrid",
+  "magallanes",
+  "manalo",
+  "marquez",
+  "martin",
+  "martinez",
+  "medina",
+  "mendoza",
+  "mercado",
+  "miller",
+  "mitchell",
+  "moore",
+  "morales",
+  "morgan",
+  "morris",
+  "murphy",
+  "myers",
+  "navarro",
+  "nelson",
+  "nguyen",
+  "ocampo",
+  "ong",
+  "ortiz",
+  "padilla",
+  "park",
+  "pascual",
+  "perez",
+  "perry",
+  "peterson",
+  "phillips",
+  "powell",
+  "price",
+  "ramirez",
+  "ramos",
+  "reid",
+  "reyes",
+  "richardson",
+  "rivera",
+  "rizal",
+  "roberts",
+  "robinson",
+  "rodriguez",
+  "rogers",
+  "rosales",
+  "ross",
+  "russell",
+  "salazar",
+  "samson",
+  "sanchez",
+  "sanders",
+  "santos",
+  "scott",
+  "silva",
+  "simpson",
+  "smith",
+  "solis",
+  "soriano",
+  "stewart",
+  "sullivan",
+  "sy",
+  "tan",
+  "taylor",
+  "thomas",
+  "thompson",
+  "tolentino",
+  "torres",
+  "turner",
+  "uy",
+  "valdez",
+  "valenzuela",
+  "vargas",
+  "vasquez",
+  "velasco",
+  "villanueva",
+  "walker",
+  "wang",
+  "ward",
+  "washington",
+  "watson",
+  "white",
+  "williams",
+  "wilson",
+  "wong",
+  "wood",
+  "wright",
+  "wu",
+  "yang",
+  "yap",
+  "young",
+  "yu",
+  "zhang",
+]);
+
+/**
+ * Particles and prepositions used in compound names.
+ */
+const PARTICLES: ReadonlySet<string> = new Set([
+  "de",
+  "del",
+  "dela",
+  "da",
+  "di",
+  "dos",
+  "des",
+  "van",
+  "von",
+  "la",
+  "le",
+  "san",
+  "santa",
+  "st",
+]);
+
+/**
+ * Exhaustive blacklist of non-person words:
+ * UI labels, calendar terms, locations, technical terms, web components, grammatical words.
+ */
+const NON_PERSON_WORDS: ReadonlySet<string> = new Set([
+  // Titles, honorifics, and role prefixes (not individual person names)
+  "atty",
+  "attorney",
+  "capt",
+  "captain",
+  "chancellor",
+  "chief",
+  "dean",
+  "dr",
+  "engineer",
+  "engr",
+  "father",
+  "gov",
+  "governor",
+  "hon",
+  "honorable",
+  "judge",
+  "lady",
+  "lord",
+  "madam",
+  "madame",
+  "mayor",
+  "miss",
+  "mr",
+  "mrs",
+  "ms",
+  "pastor",
+  "prof",
+  "professor",
+  "rev",
+  "reverend",
+  "senator",
+  "sir",
+  "sister",
+
+  // UI, navigation, buttons, controls
+  "about",
+  "accept",
+  "access",
+  "account",
+  "action",
+  "active",
+  "activity",
+  "add",
+  "address",
+  "admin",
+  "administrator",
+  "advanced",
+  "agree",
+  "alert",
+  "all",
+  "allow",
+  "analytics",
+  "app",
+  "application",
+  "apply",
+  "archive",
+  "article",
+  "asset",
+  "audio",
+  "audit",
+  "auth",
+  "author",
+  "authentication",
+  "back",
+  "badge",
+  "banner",
+  "bar",
+  "base",
+  "basic",
+  "block",
+  "blog",
+  "board",
+  "body",
+  "book",
+  "bookmark",
+  "boolean",
+  "bottom",
+  "box",
+  "branch",
+  "brand",
+  "browser",
+  "bug",
+  "build",
+  "builder",
+  "button",
+  "cache",
+  "calendar",
+  "call",
+  "camera",
+  "campaign",
+  "cancel",
+  "card",
+  "cart",
+  "category",
+  "center",
+  "change",
+  "channel",
+  "chart",
+  "chat",
+  "check",
+  "checkbox",
+  "checkout",
+  "circle",
+  "class",
+  "clean",
+  "clear",
+  "client",
+  "clip",
+  "clone",
+  "close",
+  "cloud",
+  "code",
+  "collapse",
+  "collection",
+  "color",
+  "column",
+  "comment",
+  "commit",
+  "company",
+  "complete",
+  "component",
+  "condition",
+  "config",
+  "configuration",
+  "confirm",
+  "connect",
+  "connection",
+  "console",
+  "constant",
+  "contact",
+  "container",
+  "content",
+  "continue",
+  "control",
+  "cookie",
+  "copy",
+  "copyright",
+  "core",
+  "count",
+  "create",
+  "credit",
+  "crop",
+  "current",
+  "custom",
+  "customer",
+  "cut",
+  "dark",
+  "dashboard",
+  "data",
+  "database",
+  "date",
+  "decline",
+  "default",
+  "delete",
+  "demo",
+  "demotest",
+  "deny",
+  "department",
+  "deploy",
+  "description",
+  "design",
+  "desktop",
+  "detail",
+  "details",
+  "device",
+  "devices",
+  "dialog",
+  "digest",
+  "direct",
+  "directory",
+  "disable",
+  "disabled",
+  "disagree",
+  "display",
+  "divider",
+  "doc",
+  "docs",
+  "document",
+  "documentation",
+  "domain",
+  "done",
+  "download",
+  "draft",
+  "drag",
+  "draw",
+  "drawer",
+  "drop",
+  "dummy",
+  "duplicate",
+  "dynamic",
+  "edit",
+  "editor",
+  "element",
+  "email",
+  "embed",
+  "empty",
+  "enable",
+  "enabled",
+  "engine",
+  "enter",
+  "enterprise",
+  "entity",
+  "entry",
+  "env",
+  "error",
+  "event",
+  "example",
+  "expand",
+  "export",
+  "extension",
+  "external",
+  "fab",
+  "fail",
+  "failed",
+  "failure",
+  "faq",
+  "fast",
+  "favorite",
+  "feature",
+  "features",
+  "feed",
+  "field",
+  "file",
+  "fill",
+  "filter",
+  "finish",
+  "flag",
+  "flow",
+  "folder",
+  "font",
+  "footer",
+  "form",
+  "format",
+  "formula",
+  "forward",
+  "frame",
+  "framework",
+  "free",
+  "general",
+  "generate",
+  "get",
+  "global",
+  "goto",
+  "graphic",
+  "grid",
+  "group",
+  "guide",
+  "gutter",
+  "handle",
+  "handler",
+  "header",
+  "heading",
+  "help",
+  "hidden",
+  "hide",
+  "high",
+  "history",
+  "home",
+  "host",
+  "icon",
+  "id",
+  "image",
+  "import",
+  "inbox",
+  "info",
+  "information",
+  "inline",
+  "input",
+  "insight",
+  "install",
+  "instance",
+  "integration",
+  "interface",
+  "internal",
+  "invalid",
+  "issue",
+  "item",
+  "label",
+  "labs",
+  "layer",
+  "layout",
+  "lead",
+  "learn",
+  "leave",
+  "left",
+  "level",
+  "library",
+  "license",
+  "light",
+  "limit",
+  "line",
+  "link",
+  "linked",
+  "list",
+  "load",
+  "loading",
+  "local",
+  "locale",
+  "lock",
+  "log",
+  "login",
+  "logout",
+  "low",
+  "mail",
+  "main",
+  "manage",
+  "manager",
+  "manifest",
+  "manual",
+  "map",
+  "mask",
+  "masked",
+  "master",
+  "match",
+  "matrix",
+  "max",
+  "media",
+  "medium",
+  "menu",
+  "message",
+  "meta",
+  "metric",
+  "min",
+  "modal",
+  "mode",
+  "module",
+  "more",
+  "mute",
+  "name",
+  "names",
+  "firstname",
+  "fullname",
+  "lastname",
+  "surname",
+  "username",
+  "usernames",
+  "nav",
+  "navbar",
+  "navigation",
+  "network",
+  "new",
+  "news",
+  "next",
+  "node",
+  "none",
+  "normal",
+  "note",
+  "notes",
+  "notice",
+  "notification",
+  "notify",
+  "number",
+  "numeric",
+  "object",
+  "offline",
+  "offset",
+  "online",
+  "open",
+  "option",
+  "options",
+  "order",
+  "ordinary",
+  "org",
+  "organization",
+  "outbox",
+  "outline",
+  "output",
+  "overlay",
+  "overview",
+  "package",
+  "page",
+  "panel",
+  "pane",
+  "paper",
+  "param",
+  "parameter",
+  "parent",
+  "pass",
+  "password",
+  "paste",
+  "patch",
+  "path",
+  "pause",
+  "payment",
+  "pending",
+  "permission",
+  "personal",
+  "picker",
+  "picture",
+  "pill",
+  "pin",
+  "pipe",
+  "pipeline",
+  "placeholder",
+  "play",
+  "player",
+  "plugin",
+  "point",
+  "policy",
+  "poll",
+  "popover",
+  "popup",
+  "portal",
+  "post",
+  "power",
+  "preference",
+  "preferences",
+  "premium",
+  "preview",
+  "previous",
+  "primary",
+  "privacy",
+  "private",
+  "pro",
+  "process",
+  "product",
+  "profile",
+  "program",
+  "progress",
+  "project",
+  "prompt",
+  "property",
+  "protect",
+  "protected",
+  "protocol",
+  "provider",
+  "public",
+  "pull",
+  "push",
+  "query",
+  "queue",
+  "quick",
+  "radio",
+  "range",
+  "raw",
+  "react",
+  "read",
+  "readme",
+  "recent",
+  "record",
+  "redact",
+  "redacted",
+  "redo",
+  "refresh",
+  "register",
+  "reject",
+  "release",
+  "reload",
+  "remote",
+  "remove",
+  "render",
+  "renderer",
+  "reply",
+  "report",
+  "repository",
+  "request",
+  "reset",
+  "resource",
+  "response",
+  "restore",
+  "result",
+  "retry",
+  "reveal",
+  "review",
+  "rich",
+  "right",
+  "role",
+  "root",
+  "router",
+  "row",
+  "rule",
+  "run",
+  "safe",
+  "sample",
+  "save",
+  "scale",
+  "scan",
+  "scanner",
+  "schema",
+  "scope",
+  "screen",
+  "script",
+  "scroll",
+  "search",
+  "secondary",
+  "secret",
+  "section",
+  "secure",
+  "security",
+  "select",
+  "send",
+  "sender",
+  "server",
+  "service",
+  "session",
+  "setting",
+  "settings",
+  "shadow",
+  "shape",
+  "share",
+  "sheet",
+  "shield",
+  "shift",
+  "shortcut",
+  "show",
+  "sidebar",
+  "sign",
+  "signin",
+  "signout",
+  "signup",
+  "simple",
+  "site",
+  "size",
+  "skeleton",
+  "skip",
+  "slider",
+  "slot",
+  "small",
+  "snackbar",
+  "socket",
+  "solution",
+  "sort",
+  "source",
+  "space",
+  "span",
+  "spinner",
+  "split",
+  "spoiler",
+  "standard",
+  "start",
+  "state",
+  "static",
+  "stats",
+  "status",
+  "step",
+  "sticky",
+  "stop",
+  "storage",
+  "stream",
+  "string",
+  "stroke",
+  "structure",
+  "style",
+  "stylesheet",
+  "submit",
+  "subscribe",
+  "subtitle",
+  "success",
+  "suggest",
+  "summary",
+  "super",
+  "support",
+  "switch",
+  "sync",
+  "syntax",
+  "system",
+  "tab",
+  "table",
+  "tag",
+  "target",
+  "task",
+  "team",
+  "template",
+  "term",
+  "terms",
+  "test",
+  "text",
+  "textarea",
+  "theme",
+  "thread",
+  "thumbnail",
+  "ticket",
+  "time",
+  "timeline",
+  "timer",
+  "title",
+  "toast",
+  "today",
+  "toggle",
+  "token",
+  "tool",
+  "toolbar",
+  "tooltip",
+  "top",
+  "total",
+  "touch",
+  "track",
+  "tracker",
+  "traffic",
+  "tree",
+  "trigger",
+  "true",
+  "try",
+  "tutorial",
+  "type",
+  "typography",
+  "undo",
+  "unit",
+  "unknown",
+  "unlink",
+  "unlock",
+  "unread",
+  "unseen",
+  "update",
+  "upload",
+  "url",
+  "usage",
+  "user",
+  "utility",
+  "valid",
+  "validation",
+  "value",
+  "variable",
+  "vector",
+  "vendor",
+  "version",
+  "video",
+  "view",
+  "viewer",
+  "viewport",
+  "visible",
+  "voice",
+  "volume",
+  "warning",
+  "watch",
+  "web",
+  "webhook",
+  "website",
+  "welcome",
+  "widget",
+  "window",
+  "wizard",
+  "workspace",
+  "wrapper",
+  "write",
+  "writer",
+  "yesterday",
+  "zone",
+
+  // Places, street suffixes, common geography & infrastructure
+  "airport",
+  "alley",
+  "america",
+  "arcade",
+  "avenue",
+  "bay",
+  "beach",
+  "boulevard",
+  "bridge",
+  "broadway",
+  "building",
+  "campus",
+  "canal",
+  "canyon",
+  "cape",
+  "capital",
+  "center",
+  "centre",
+  "channel",
+  "circle",
+  "city",
+  "clinic",
+  "coast",
+  "college",
+  "colony",
+  "commons",
+  "corner",
+  "country",
+  "county",
+  "court",
+  "cove",
+  "creek",
+  "crescent",
+  "crossing",
+  "district",
+  "division",
+  "drive",
+  "earth",
+  "estate",
+  "expressway",
+  "facility",
+  "field",
+  "floor",
+  "forest",
+  "freeway",
+  "garden",
+  "gardens",
+  "gate",
+  "gateway",
+  "grove",
+  "harbor",
+  "haven",
+  "heights",
+  "highway",
+  "hill",
+  "hills",
+  "hospital",
+  "hotel",
+  "house",
+  "institute",
+  "island",
+  "islands",
+  "junction",
+  "kingdom",
+  "lake",
+  "lane",
+  "loop",
+  "mall",
+  "manor",
+  "market",
+  "meadow",
+  "metro",
+  "mountain",
+  "mountains",
+  "museum",
+  "nation",
+  "neighborhood",
+  "ocean",
+  "office",
+  "park",
+  "parkway",
+  "path",
+  "pier",
+  "place",
+  "plaza",
+  "point",
+  "port",
+  "province",
+  "quay",
+  "region",
+  "republic",
+  "resort",
+  "ridge",
+  "river",
+  "road",
+  "room",
+  "route",
+  "row",
+  "school",
+  "sea",
+  "sector",
+  "shore",
+  "shores",
+  "skyway",
+  "space",
+  "square",
+  "state",
+  "station",
+  "store",
+  "strada",
+  "street",
+  "strip",
+  "studio",
+  "suite",
+  "summit",
+  "temple",
+  "terminal",
+  "terrace",
+  "theater",
+  "tower",
+  "town",
+  "track",
+  "trail",
+  "tunnel",
+  "turnpike",
+  "union",
+  "university",
+  "valley",
+  "village",
+  "vista",
+  "walk",
+  "way",
+  "world",
+  "yard",
+
+  // Prominent city/country names that are not person names
+  "angeles",
+  "atlanta",
+  "austin",
+  "bangkok",
+  "barcelona",
+  "beijing",
+  "berlin",
+  "boston",
+  "california",
+  "canada",
+  "cebu",
+  "chicago",
+  "china",
+  "dallas",
+  "davao",
+  "denver",
+  "dubai",
+  "england",
+  "europe",
+  "florida",
+  "france",
+  "germany",
+  "hawaii",
+  "houston",
+  "india",
+  "indonesia",
+  "italy",
+  "japan",
+  "korea",
+  "london",
+  "madrid",
+  "makati",
+  "malaysia",
+  "manila",
+  "melbourne",
+  "mexico",
+  "miami",
+  "moscow",
+  "munich",
+  "netherlands",
+  "oak",
+  "paris",
+  "pasig",
+  "philippines",
+  "phoenix",
+  "quezon",
+  "rome",
+  "russia",
+  "seattle",
+  "seoul",
+  "singapore",
+  "spain",
+  "sydney",
+  "taguig",
+  "texas",
+  "tokyo",
+  "toronto",
+  "vancouver",
+  "vietnam",
+  "washington",
+  "york",
+
+  // Tech brands, platforms, languages, acronyms
+  "amazon",
+  "amd",
+  "android",
+  "angular",
+  "apache",
+  "apple",
+  "aws",
+  "azure",
+  "bitbucket",
+  "brave",
+  "chrome",
+  "cloudflare",
+  "discord",
+  "docker",
+  "edge",
+  "facebook",
+  "firebase",
+  "firefox",
+  "git",
+  "github",
+  "gitlab",
+  "golang",
+  "google",
+  "graphql",
+  "html",
+  "http",
+  "https",
+  "ibm",
+  "instagram",
+  "intel",
+  "ios",
+  "java",
+  "javascript",
+  "json",
+  "jwt",
+  "kubernetes",
+  "linux",
+  "macos",
+  "meta",
+  "microsoft",
+  "mongodb",
+  "mysql",
+  "netlify",
+  "nextjs",
+  "nodejs",
+  "nvidia",
+  "openai",
+  "opera",
+  "oracle",
+  "postgres",
+  "postgresql",
+  "postman",
+  "python",
+  "quora",
+  "reactjs",
+  "redis",
+  "redux",
+  "rest",
+  "rust",
+  "safari",
+  "slack",
+  "sqlite",
+  "supabase",
+  "svelte",
+  "tailwind",
+  "tekasend",
+  "tiktok",
+  "twitter",
+  "typescript",
+  "ubuntu",
+  "vercel",
+  "vite",
+  "vue",
+  "vuejs",
+  "webpack",
+  "windows",
+  "wordpress",
+  "youtube",
+  "zoom",
+
+  // Temporal, days of week, months, seasons
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+  "spring",
+  "summer",
+  "autumn",
+  "winter",
+  "morning",
+  "afternoon",
+  "evening",
+  "night",
+  "dawn",
+  "dusk",
+  "noon",
+  "midnight",
+  "quarter",
+  "annual",
+  "weekly",
+  "monthly",
+  "daily",
+  "hourly",
+
+  // Grammatical words, sentence starters, demonstratives, pronouns
+  "although",
+  "another",
+  "any",
+  "anyone",
+  "anything",
+  "anywhere",
+  "because",
+  "before",
+  "besides",
+  "between",
+  "both",
+  "certain",
+  "each",
+  "either",
+  "else",
+  "enough",
+  "every",
+  "everyone",
+  "everything",
+  "everywhere",
+  "few",
+  "furthermore",
+  "here",
+  "however",
+  "indeed",
+  "instead",
+  "itself",
+  "many",
+  "maybe",
+  "meanwhile",
+  "moreover",
+  "much",
+  "myself",
+  "neither",
+  "nevertheless",
+  "nobody",
+  "nothing",
+  "nowhere",
+  "one",
+  "other",
+  "others",
+  "otherwise",
+  "perhaps",
+  "please",
+  "several",
+  "since",
+  "some",
+  "someone",
+  "something",
+  "somewhere",
+  "such",
+  "than",
+  "that",
+  "their",
+  "theirs",
+  "them",
+  "themselves",
+  "then",
+  "there",
+  "therefore",
+  "these",
+  "they",
+  "this",
+  "those",
+  "though",
+  "through",
+  "thus",
+  "unless",
+  "until",
+  "upon",
+  "what",
+  "whatever",
+  "when",
+  "whenever",
+  "where",
+  "wherever",
+  "which",
+  "whichever",
+  "while",
+  "whilst",
+  "whoever",
+  "whose",
+  "without",
+  "yourself",
+  "yourselves",
+]);
+
+/**
+ * Checks whether text surrounding a target span provides strong person context.
+ *
+ * @param source - Full text content.
+ * @param start - Start index of candidate name.
+ * @param end - End index of candidate name.
+ * @returns True if strong personal context precedes or follows the span.
+ */
+export function hasPersonContext(
+  source: string,
+  start: number,
+  end: number,
+): boolean {
+  if (!source || start < 0 || end > source.length || start >= end) {
+    return false;
+  }
+
+  // Look back up to 60 characters for explicit honorifics, labels, and salutations
+  const beforeText = source.slice(Math.max(0, start - 60), start);
+  if (EXPLICIT_BEFORE_REGEX.test(beforeText)) {
+    return true;
+  }
+
+  // Look ahead up to 35 characters for person-action verbs (e.g., "Olivia Chen wrote...")
+  const afterText = source.slice(end, Math.min(source.length, end + 35));
+  if (PERSON_ACTIONS_AFTER.test(afterText)) {
+    return true;
+  }
+
+  return false;
 }
 
-/** Rejects title-case UI phrases even when a model calls them a person. */
-export function isPlausiblePersonName(name: string, source: string, start: number): boolean {
+/**
+ * Checks whether a single word or token is a known first name.
+ */
+export function isKnownFirstName(word: string): boolean {
+  return KNOWN_FIRST_NAMES.has(word.toLowerCase());
+}
+
+/**
+ * Checks whether a single word or token is a known surname.
+ */
+export function isKnownSurname(word: string): boolean {
+  return KNOWN_SURNAMES.has(word.toLowerCase());
+}
+
+/**
+ * Determines whether a candidate string is a plausible person name, rejecting
+ * capitalized UI phrases, street addresses, location names, and non-person jargon.
+ *
+ * @param name - Candidate name substring.
+ * @param source - Full source text for context evaluation.
+ * @param start - Character offset of candidate within source text.
+ * @returns True if candidate passes strict name shape and negative filtering rules.
+ */
+export function isPlausiblePersonName(
+  name: string,
+  source: string,
+  start: number,
+): boolean {
+  if (!name || typeof name !== "string") {
+    return false;
+  }
+
   const trimmed = name.trim();
-  if (!nameShapePattern.test(trimmed)) return false;
-  const words = trimmed.split(/[ \t]+/);
-  if (words.some(part => !particles.has(part) && nonPersonWords.has(part.toLocaleLowerCase()))) return false;
-  return words.length > 1 || hasPersonContext(source, start, start + trimmed.length);
-}
+  if (trimmed.length < 2 || trimmed.length > 50) {
+    return false;
+  }
 
-/** Finds names only with a person label or clear person-related sentence context. */
-export function findNames(text: string): NameMatch[] {
-  const matches: NameMatch[] = [];
-  for (const match of text.matchAll(fullNamePattern)) {
-    if (match.index === undefined || !isPlausiblePersonName(match[0], text, match.index)) continue;
-    const end = match.index + match[0].length;
-    const previous = matches[matches.length - 1];
-    const coordinatedName = previous && text.slice(previous.end, match.index) === ' and ';
-    if (hasPersonContext(text, match.index, end) || coordinatedName) {
-      matches.push({ start: match.index, end, text: match[0] });
+  // Must match standard capitalized name pattern (letters, hyphens, apostrophes only)
+  if (!STRICT_NAME_SHAPE_REGEX.test(trimmed)) {
+    return false;
+  }
+
+  // Reject ALL CAPS strings (likely acronyms, headers, SQL keywords, or constants)
+  if (
+    trimmed.length > 3 &&
+    trimmed === trimmed.toUpperCase() &&
+    !trimmed.includes(" ")
+  ) {
+    return false;
+  }
+
+  const words = trimmed.split(/[ \t]+/);
+
+  // If any constituent word is a non-person word (UI label, location, tech term), reject
+  for (const part of words) {
+    const lower = part.toLowerCase();
+    if (PARTICLES.has(lower)) {
+      continue;
+    }
+    if (NON_PERSON_WORDS.has(lower)) {
+      return false;
     }
   }
-  nameLabelPattern.lastIndex = 0;
-  for (const match of text.matchAll(nameLabelPattern)) {
-    if (match.index === undefined) continue;
-    const start = match.index + match[0].length;
-    const name = nameAfterLabelPattern.exec(text.slice(start))?.[0];
-    if (!name || !isPlausiblePersonName(name, text, start)) continue;
-    matches.push({ start, end: start + name.length, text: name });
+
+  const hasContext = hasPersonContext(source, start, start + trimmed.length);
+
+  // Single-word names MUST have explicit person context OR be a recognized first name with person context
+  if (words.length === 1) {
+    return (
+      hasContext &&
+      (isKnownFirstName(words[0]) || hasExplicitLabelPrefix(source, start))
+    );
   }
-  matches.sort((a, b) => a.start - b.start || b.end - a.end);
-  const unique: NameMatch[] = [];
+
+  // For multi-word names:
+  // If explicitly prefixed by label/honorific/greeting or followed by person action verb, accept
+  if (hasContext) {
+    return true;
+  }
+
+  // In standard running text without explicit prefixes, require that at least one of the tokens
+  // is a recognized first name OR surname, avoiding false positives on arbitrary title-case pairs.
+  const hasRecognizedNameToken = words.some((w) => {
+    const lower = w.toLowerCase();
+    return isKnownFirstName(lower) || isKnownSurname(lower);
+  });
+
+  if (!hasRecognizedNameToken) {
+    return false;
+  }
+
+  // Check if at sentence start without person cues (e.g., "Visible Text", "Next Step")
+  const textBefore = source.slice(Math.max(0, start - 4), start);
+  const isAtSentenceStart = start === 0 || /(?:[.!?\n]\s*)$/.test(textBefore);
+
+  if (isAtSentenceStart && !isKnownFirstName(words[0])) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Checks whether the text immediately before the start index has an explicit label/title prefix.
+ */
+function hasExplicitLabelPrefix(source: string, start: number): boolean {
+  const beforeText = source.slice(Math.max(0, start - 50), start);
+  return EXPLICIT_BEFORE_REGEX.test(beforeText);
+}
+
+/**
+ * Refines a raw matched multi-word string into the most plausible person name sub-span,
+ * stripping leading/trailing non-person words (e.g. "Contact Maria Santos" -> "Maria Santos").
+ */
+function refineNameSpan(
+  rawMatch: string,
+  fullText: string,
+  startOffset: number,
+): { start: number; end: number; text: string } | null {
+  const wordMatches = Array.from(
+    rawMatch.matchAll(new RegExp(WORD_PATTERN, "gu")),
+  );
+  if (wordMatches.length === 0) {
+    return null;
+  }
+
+  // Find the first word that is not a non-person word
+  let firstIdx = 0;
+  while (firstIdx < wordMatches.length) {
+    const word = wordMatches[firstIdx][0].toLowerCase();
+    if (PARTICLES.has(word) || !NON_PERSON_WORDS.has(word)) {
+      break;
+    }
+    firstIdx++;
+  }
+
+  // Find the last word that is not a non-person word
+  let lastIdx = wordMatches.length - 1;
+  while (lastIdx >= firstIdx) {
+    const word = wordMatches[lastIdx][0].toLowerCase();
+    if (PARTICLES.has(word) || !NON_PERSON_WORDS.has(word)) {
+      break;
+    }
+    lastIdx--;
+  }
+
+  if (firstIdx > lastIdx) {
+    return null;
+  }
+
+  const validWords = wordMatches.slice(firstIdx, lastIdx + 1);
+  if (validWords.length === 0 || validWords.length > 4) {
+    return null;
+  }
+
+  const subStart = startOffset + validWords[0].index!;
+  const subEnd =
+    startOffset +
+    validWords[validWords.length - 1].index! +
+    validWords[validWords.length - 1][0].length;
+  const candidateText = fullText.slice(subStart, subEnd);
+
+  if (isPlausiblePersonName(candidateText, fullText, subStart)) {
+    return { start: subStart, end: subEnd, text: candidateText };
+  }
+
+  return null;
+}
+
+/**
+ * Scans input text and returns non-overlapping detected personal name spans.
+ * Strictly avoids false positives on consecutive capitalized words.
+ *
+ * @param text - Source string to evaluate.
+ * @returns Sorted array of NameMatch items with character offsets.
+ */
+export function findNames(text: string): NameMatch[] {
+  if (!text || typeof text !== "string") {
+    return [];
+  }
+
+  const matches: NameMatch[] = [];
+
+  // 1. Scan for multi-word candidate name patterns
+  FULL_NAME_REGEX.lastIndex = 0;
+  for (const match of text.matchAll(FULL_NAME_REGEX)) {
+    if (match.index === undefined) {
+      continue;
+    }
+
+    const matchedStr = match[0];
+    const startIndex = match.index;
+
+    // Attempt direct match first, or refine sub-span by trimming non-person bounding tokens
+    let candidate: { start: number; end: number; text: string } | null = null;
+
+    if (isPlausiblePersonName(matchedStr, text, startIndex)) {
+      candidate = {
+        start: startIndex,
+        end: startIndex + matchedStr.length,
+        text: matchedStr,
+      };
+    } else {
+      candidate = refineNameSpan(matchedStr, text, startIndex);
+    }
+
+    if (!candidate) {
+      continue;
+    }
+
+    const previousMatch = matches[matches.length - 1];
+    const isCoordinated =
+      previousMatch &&
+      text.slice(previousMatch.end, candidate.start).trim() === "and";
+
+    if (
+      hasPersonContext(text, candidate.start, candidate.end) ||
+      isCoordinated ||
+      hasRecognizedNamePair(candidate.text)
+    ) {
+      matches.push(candidate);
+    }
+  }
+
+  // 2. Scan for single or multi-word names immediately following explicit labels/honorifics
+  EXPLICIT_LABEL_GLOBAL_REGEX.lastIndex = 0;
+  for (const match of text.matchAll(EXPLICIT_LABEL_GLOBAL_REGEX)) {
+    if (match.index === undefined) {
+      continue;
+    }
+
+    const rawPrefixEnd = match.index + match[0].length;
+    const remainingText = text.slice(rawPrefixEnd);
+    const spaceMatch = /^[ \t]+/.exec(remainingText);
+    const leadingSpace = spaceMatch ? spaceMatch[0].length : 0;
+    let prefixEnd = rawPrefixEnd + leadingSpace;
+
+    // If candidate immediately starts with a title/honorific (e.g. "Meeting with Dr. Michael Brown"), consume it
+    const titleMatch = new RegExp(`^(?:${TITLE_PREFIXES})`, "i").exec(
+      text.slice(prefixEnd),
+    );
+    if (titleMatch && titleMatch[0]) {
+      prefixEnd += titleMatch[0].length;
+    }
+
+    const nameMatch = SINGLE_OR_MULTI_NAME_AFTER_LABEL.exec(
+      text.slice(prefixEnd),
+    );
+
+    if (!nameMatch || !nameMatch[0]) {
+      continue;
+    }
+
+    const nameText = nameMatch[0].trim();
+    if (!nameText || !isPlausiblePersonName(nameText, text, prefixEnd)) {
+      continue;
+    }
+
+    matches.push({
+      start: prefixEnd,
+      end: prefixEnd + nameText.length,
+      text: nameText,
+    });
+  }
+
+  // 3. Sort by start offset and deduplicate overlapping spans (prefer longer match)
+  matches.sort(
+    (a, b) => a.start - b.start || b.end - b.start - (a.end - a.start),
+  );
+
+  const uniqueMatches: NameMatch[] = [];
+  let lastCoveredEnd = -1;
+
   for (const match of matches) {
-    if (unique.every(previous => match.start >= previous.end)) unique.push(match);
+    if (match.start >= lastCoveredEnd) {
+      uniqueMatches.push(match);
+      lastCoveredEnd = match.end;
+    }
   }
-  return unique;
+
+  return uniqueMatches;
+}
+
+/**
+ * Checks whether a multi-word string contains recognized first and last name combinations.
+ */
+function hasRecognizedNamePair(candidate: string): boolean {
+  const words = candidate.trim().split(/[ \t]+/);
+  if (words.length < 2) {
+    return false;
+  }
+  const first = words[0].toLowerCase();
+  const last = words[words.length - 1].toLowerCase();
+  return (
+    (isKnownFirstName(first) && isKnownSurname(last)) ||
+    (isKnownFirstName(first) && words.length >= 2) ||
+    (isKnownSurname(last) && words.length >= 2)
+  );
 }

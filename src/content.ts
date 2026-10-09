@@ -43,6 +43,76 @@ function removeProtectedItem(element: HTMLElement, itemId: string): void {
   elementProtectedMap.set(element, current);
 }
 
+function getElementCurrentEffect(element: HTMLElement): Effect | null {
+  if (element.classList.contains('pl-blur')) return 'blur';
+  if (element.classList.contains('pl-spoiler')) return 'spoiler';
+  if (element.classList.contains('pl-masked')) return 'placeholder';
+  if (element.classList.contains('pl-dummy')) return 'dummy';
+  return null;
+}
+
+type UndoItem =
+  | {
+      kind: 'field';
+      element: HTMLInputElement | HTMLTextAreaElement;
+      previousText: string;
+      previousProtected: ProtectedItem[];
+      resultText: string;
+    }
+  | {
+      kind: 'page_manual';
+      element: HTMLElement;
+      action: Action;
+    }
+  | {
+      kind: 'page_finding';
+      element: HTMLElement;
+      previousAltered: boolean;
+      previousEffect: Effect | null;
+    };
+
+const undoStack: UndoItem[] = [];
+
+function pushUndo(item: UndoItem): void {
+  undoStack.push(item);
+  if (undoStack.length > 50) undoStack.shift();
+}
+
+function performUndo(): boolean {
+  if (undoStack.length === 0) return false;
+  const item = undoStack.pop()!;
+
+  if (item.kind === 'field') {
+    if (!item.element.isConnected) return false;
+    inputObserver.setFieldText(item.element, item.previousText);
+    setProtectedItems(item.element, item.previousProtected);
+
+    const newFindings = ruleMatcher.match(item.previousText);
+    const bounds = item.element.getBoundingClientRect();
+    inputIndicator.update(item.element, newFindings, bounds, item.previousProtected);
+    inputHighlighter.update(item.element, newFindings);
+    return true;
+  }
+
+  if (item.kind === 'page_manual') {
+    if (!item.element.isConnected) return false;
+    applyAction({ kind: 'text', element: item.element }, 'restore');
+    return true;
+  }
+
+  if (item.kind === 'page_finding') {
+    if (!item.element.isConnected) return false;
+    if (item.previousAltered && item.previousEffect) {
+      applyAction({ kind: 'text', element: item.element }, item.previousEffect);
+    } else {
+      applyAction({ kind: 'text', element: item.element }, 'restore');
+    }
+    return true;
+  }
+
+  return false;
+}
+
 const ruleMatcher = new DeterministicRuleMatcher();
 const privacyReplacer = new PrivacyReplacer();
 
@@ -102,8 +172,8 @@ style.textContent = `
   .pl-finding.pl-spoiler * { background-color:transparent!important; background-image:none!important; }
   .pl-finding.pl-blur { background:transparent!important; color:inherit!important; filter:blur(5px)!important; user-select:none!important; }
   .pl-finding.pl-blur .pl-finding { background:transparent!important; }
-  .pl-finding.pl-masked { background:#191d27!important; color:white!important; padding:0 3px!important; }
-  .pl-finding.pl-dummy { background:transparent!important; color:inherit!important; padding:0!important; }
+  .pl-finding.pl-masked { background: transparent !important; color: inherit !important; padding: 0 !important; }
+  .pl-finding.pl-dummy { background: transparent !important; color: inherit !important; padding: 0 !important; }
 `;
 (document.head || document.documentElement).append(style);
 
@@ -140,14 +210,6 @@ const brandIcon = document.createElement('span');
 brandIcon.className = 'brand-icon';
 brandIcon.textContent = 'i';
 brand.append(brandIcon, document.createTextNode('TekaSend'));
-const notice = document.createElement('div');
-notice.className = 'bubble notice';
-notice.setAttribute('role', 'status');
-const noticeBrand = brand.cloneNode(true);
-const noticeCopy = document.createElement('div');
-noticeCopy.className = 'copy';
-notice.append(noticeBrand, noticeCopy);
-shadow.append(notice);
 
 const hint = document.createElement('div');
 hint.className = 'bubble hint';
@@ -188,6 +250,15 @@ function applyFieldRepair(
   );
 
   const sanitizedText = repair.sanitizedText;
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+    pushUndo({
+      kind: 'field',
+      element,
+      previousText: currentText,
+      previousProtected: [...protectedList],
+      resultText: sanitizedText
+    });
+  }
   inputObserver.setFieldText(element, sanitizedText);
 
   // 5. Get the actual assigned replacement token from the replacementMap
@@ -560,6 +631,15 @@ function sanitizeActiveField(
     findings,
   );
   const sanitizedText = repair.sanitizedText;
+  if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
+    pushUndo({
+      kind: 'field',
+      element: activeElement,
+      previousText: currentText,
+      previousProtected: [...protectedList],
+      resultText: sanitizedText
+    });
+  }
   inputObserver.setFieldText(activeElement, sanitizedText);
 
   for (const finding of findings) {
@@ -589,10 +669,36 @@ function sanitizeActiveField(
   return true;
 }
 
-// Global Keyboard Shortcut: Alt + P / Option + P or Cmd/Ctrl + Shift + P to sanitize active field
+// Global Keyboard Shortcut: Alt + P / Option + P or Cmd/Ctrl + Shift + P to sanitize active field; Ctrl + Z to undo
 document.addEventListener(
   "keydown",
   (event: KeyboardEvent) => {
+    const isUndo =
+      (event.ctrlKey || event.metaKey) &&
+      !event.shiftKey &&
+      !event.altKey &&
+      (event.key === "z" || event.key === "Z" || event.code === "KeyZ");
+
+    if (isUndo) {
+      if (undoStack.length > 0) {
+        const top = undoStack[undoStack.length - 1];
+        const active = document.activeElement;
+        if (top.kind === 'field') {
+          if (active === top.element && top.element.value === top.resultText) {
+            event.preventDefault();
+            event.stopPropagation();
+            performUndo();
+            return;
+          }
+        } else {
+          event.preventDefault();
+          event.stopPropagation();
+          performUndo();
+          return;
+        }
+      }
+    }
+
     const isAltP =
       event.altKey &&
       !event.ctrlKey &&
@@ -626,7 +732,6 @@ document.addEventListener(
 );
 
 let activeHintFinding: HTMLElement | null = null;
-let noticeTimeout = 0;
 
 function placeBubble(element: HTMLElement, rect: DOMRect): void {
   element.classList.add('show');
@@ -642,13 +747,6 @@ function placeBubble(element: HTMLElement, rect: DOMRect): void {
   element.style.setProperty('--pointer-x', `${Math.max(22, Math.min(width - 22, center - left))}px`);
 }
 
-function showNotice(message: string, rect: DOMRect): void {
-  noticeCopy.textContent = message;
-  placeBubble(notice, rect);
-  clearTimeout(noticeTimeout);
-  noticeTimeout = window.setTimeout(() => notice.classList.remove('show'), 6500);
-}
-
 function isTextAltered(element: HTMLElement): boolean {
   return ['pl-blur', 'pl-spoiler', 'pl-masked', 'pl-dummy'].some(name => element.classList.contains(name));
 }
@@ -661,13 +759,22 @@ function applyAutomaticMask(element: HTMLElement): void {
 
 function syncAutomaticMasking(effectChanged = false, maskUnaltered = true): void {
   for (const element of Array.from(document.querySelectorAll<HTMLElement>('.pl-finding'))) {
+    if (element.hasAttribute('data-pl-manual')) continue;
     const autoMasked = element.hasAttribute('data-pl-auto-mask');
+    const altered = isTextAltered(element);
     if (!hideByDefault) {
-      if (autoMasked) applyAction({ kind: 'text', element }, 'restore');
-    } else if (autoMasked && effectChanged) {
-      applyAction({ kind: 'text', element }, selectedEffect);
-    } else if (!autoMasked && maskUnaltered) {
-      applyAutomaticMask(element);
+      if (autoMasked) {
+        applyAction({ kind: 'text', element }, 'restore');
+      } else if (effectChanged && altered) {
+        applyAction({ kind: 'text', element }, selectedEffect);
+      }
+    } else {
+      if (effectChanged || altered) {
+        applyAction({ kind: 'text', element }, selectedEffect);
+        element.setAttribute('data-pl-auto-mask', '');
+      } else if (!autoMasked && maskUnaltered) {
+        applyAutomaticMask(element);
+      }
     }
   }
 }
@@ -762,18 +869,17 @@ function refreshHighlights(): void {
   for (const span of Array.from(document.querySelectorAll<HTMLElement>('.pl-finding'))) {
     const category = span.getAttribute('data-pl-category') as DetectionCategory | null;
     if (category && !enabledCategories[category]) {
-      // Keep a mask the user applied, but remove automatically masked disabled findings.
-      if (isTextAltered(span) && !span.hasAttribute('data-pl-auto-mask')) continue;
       spoiler.remove(span);
+      span.classList.remove('pl-blur', 'pl-spoiler', 'pl-masked', 'pl-dummy');
+      span.removeAttribute('data-pl-auto-mask');
       const original = originalText.get(span);
       span.replaceWith(original?.cloneNode(true) ?? document.createTextNode(span.textContent || ''));
     }
   }
   hint.classList.remove('show');
   scanRules();
-  // Reconcile spans already on the page as well as the ones scanRules just made.
-  // This also handles an extension reload while the tab stays open.
   syncAutomaticMasking();
+  updateAllPagePlaceholdersForCategory();
   if (document.documentElement) {
     observer.observe(document.documentElement, { childList: true, characterData: true, subtree: true });
   }
@@ -790,6 +896,56 @@ const settingsReady = chrome.storage.local.get([...categoryKeys.map(storageCateg
   .catch(error => console.warn('TekaSend: Could not load detection settings:', error))
   .finally(refreshHighlights);
 
+function getDistinctRawTextsForCategory(category: FindingCategory): string[] {
+  const distinct: string[] = [];
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>('.pl-finding'))) {
+    const elType = el.getAttribute('data-pl-type') || '';
+    const elCat = mapTypeToCategory(elType);
+    if (elCat === category) {
+      const elRaw = originalText.get(el)?.textContent ?? el.textContent ?? '';
+      if (elRaw && !distinct.includes(elRaw)) {
+        distinct.push(elRaw);
+      }
+    }
+  }
+  return distinct;
+}
+
+function getPagePlaceholder(element: HTMLElement): string {
+  const type = element.getAttribute('data-pl-type') || 'text';
+  const category = mapTypeToCategory(type);
+  const raw = originalText.get(element)?.textContent ?? element.textContent ?? '';
+
+  const distinctRawTexts = getDistinctRawTextsForCategory(category);
+  const distinctIndex = distinctRawTexts.indexOf(raw);
+  const entityIndex = distinctRawTexts.length > 1 && distinctIndex >= 0 ? distinctIndex + 1 : 0;
+
+  const dummyFinding: SensitiveFinding = {
+    id: 'page_finding',
+    label: type,
+    category,
+    rawText: raw,
+    start: 0,
+    end: raw.length,
+    severity: 'medium',
+    source: 'regex_rule',
+    confidence: 1.0,
+    suggestedReplacement: `[${category.toUpperCase()}]`
+  };
+
+  return privacyReplacer.generateReplacement(dummyFinding, 'semantic_placeholder', entityIndex);
+}
+
+function updateAllPagePlaceholdersForCategory(category?: FindingCategory): void {
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>('.pl-finding.pl-masked'))) {
+    const elType = el.getAttribute('data-pl-type') || '';
+    const elCat = mapTypeToCategory(elType);
+    if (!category || elCat === category) {
+      el.textContent = getPagePlaceholder(el);
+    }
+  }
+}
+
 function applyAction(target: Target, action: Action): void {
   const element = target.element;
 
@@ -798,7 +954,15 @@ function applyAction(target: Target, action: Action): void {
     spoiler.remove(element);
     element.classList.remove('pl-blur', 'pl-spoiler', 'pl-masked', 'pl-dummy');
     element.removeAttribute('data-pl-auto-mask');
-    if (original) element.replaceChildren(original.cloneNode(true));
+    if (element.hasAttribute('data-pl-manual')) {
+      const content = original ? original.cloneNode(true) : document.createTextNode(element.textContent || '');
+      element.replaceWith(content);
+    } else {
+      if (original) element.replaceChildren(original.cloneNode(true));
+    }
+    const type = element.getAttribute('data-pl-type') || 'text';
+    const category = mapTypeToCategory(type);
+    updateAllPagePlaceholdersForCategory(category);
     return;
   }
   const sourceText = original?.textContent ?? element.textContent ?? '';
@@ -813,8 +977,10 @@ function applyAction(target: Target, action: Action): void {
     spoiler.add(element);
   } else if (action === 'placeholder') {
     element.classList.add('pl-masked');
+    element.textContent = getPagePlaceholder(element);
     const type = element.getAttribute('data-pl-type') || 'text';
-    element.textContent = `YOUR_${type.toUpperCase().replace(/\s+/g, '_')}`;
+    const category = mapTypeToCategory(type);
+    updateAllPagePlaceholdersForCategory(category);
   } else if (action === 'dummy') {
     element.classList.add('pl-dummy');
     element.textContent = createDummyText(sourceText);
@@ -831,7 +997,28 @@ document.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
     hint.classList.remove('show');
-    if (isTextAltered(finding)) {
+    const wasAltered = isTextAltered(finding);
+    const previousEffect = getElementCurrentEffect(finding);
+
+    const isManual = finding.hasAttribute('data-pl-manual');
+    if (isManual) {
+      pushUndo({
+        kind: 'page_manual',
+        element: finding,
+        action: wasAltered ? 'restore' : selectedEffect,
+      });
+      applyAction({ kind: 'text', element: finding }, wasAltered ? 'restore' : selectedEffect);
+      return;
+    }
+
+    pushUndo({
+      kind: 'page_finding',
+      element: finding,
+      previousAltered: wasAltered,
+      previousEffect: previousEffect,
+    });
+
+    if (wasAltered) {
       applyAction({ kind: 'text', element: finding }, 'restore');
     } else {
       void settingsReady.then(() => {
@@ -852,6 +1039,10 @@ function mapTypeToCategory(type: string): FindingCategory {
   if (lower.includes('email')) return 'email';
   if (lower.includes('phone')) return 'phone';
   if (lower.includes('name') && !lower.includes('username')) return 'person_name';
+  if (lower.includes('address') || lower.includes('location') || lower.includes('street') || lower.includes('city')) return 'address';
+  if (lower.includes('ip') || lower.includes('host')) return 'ip_address';
+  if (lower.includes('card') || lower.includes('credit') || lower.includes('bank')) return 'credit_card';
+  if (lower.includes('ssn') || lower.includes('tax') || lower.includes('gov')) return 'ssn';
   return 'custom_sensitive';
 }
 
@@ -970,11 +1161,313 @@ async function scanAi(force = false): Promise<{ ok: boolean; error?: string; pro
     }
     wrapNode(node, clean);
   }
+  updateAllPagePlaceholdersForCategory();
   observer.observe(document.documentElement, { childList: true, characterData: true, subtree: true });
   return { ok: true, breakdown, provider };
 }
 
-chrome.runtime.onMessage.addListener((message: { kind?: string }, _sender, respond) => {
+function wrapSelection(range: Range): HTMLElement | null {
+  if (range.collapsed || !range.commonAncestorContainer.isConnected) return null;
+  const common = range.commonAncestorContainer;
+  const parent = common instanceof Element ? common : common.parentElement;
+  if (parent?.closest('[data-privacy-lens-ui]')) return null;
+
+  const span = document.createElement('span');
+  span.className = 'pl-finding pl-medium';
+  span.setAttribute('data-pl-type', 'Sensitive text');
+  span.setAttribute('data-pl-category', 'custom_sensitive');
+  span.setAttribute('data-pl-manual', 'true');
+  const fragment = range.extractContents();
+  originalText.set(span, fragment.cloneNode(true) as DocumentFragment);
+  span.append(fragment);
+  range.insertNode(span);
+  return span;
+}
+
+let pendingFindingElement: HTMLElement | null = null;
+let pendingSelectionRange: Range | null = null;
+let pendingFieldElement: HTMLElement | null = null;
+let pendingFieldSelection: { start: number; end: number; text: string } | null = null;
+
+document.addEventListener(
+  'contextmenu',
+  event => {
+    const target = event.target;
+    pendingFindingElement = target instanceof HTMLElement ? target.closest('.pl-finding') : null;
+
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+      pendingFieldElement = target;
+      const start = target.selectionStart ?? 0;
+      const end = target.selectionEnd ?? 0;
+      if (end > start) {
+        pendingFieldSelection = {
+          start,
+          end,
+          text: target.value.slice(start, end)
+        };
+      } else {
+        pendingFieldSelection = null;
+      }
+      pendingSelectionRange = null;
+      return;
+    }
+
+    const active = document.activeElement;
+    if (active && (active instanceof HTMLElement && active.isContentEditable)) {
+      pendingFieldElement = active;
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+        pendingSelectionRange = sel.getRangeAt(0).cloneRange();
+      } else {
+        pendingSelectionRange = null;
+      }
+      pendingFieldSelection = null;
+      return;
+    }
+
+    pendingFieldElement = null;
+    pendingFieldSelection = null;
+
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      if (range.commonAncestorContainer.parentElement?.closest('[data-privacy-lens-ui]')) {
+        pendingSelectionRange = null;
+      } else {
+        pendingSelectionRange = range.cloneRange();
+      }
+    } else {
+      pendingSelectionRange = null;
+    }
+  },
+  true
+);
+
+function handleContextMenuAction(action: string, selectionText: string): void {
+  // 1. Input / Textarea Field Context
+  if (pendingFieldElement && (pendingFieldElement instanceof HTMLInputElement || pendingFieldElement instanceof HTMLTextAreaElement)) {
+    const field = pendingFieldElement;
+    const start = pendingFieldSelection?.start ?? field.selectionStart ?? 0;
+    const end = pendingFieldSelection?.end ?? field.selectionEnd ?? 0;
+    const selectedText = (start < end ? field.value.slice(start, end) : '') || selectionText;
+    const previousVal = field.value;
+    const previousProt = [...getProtectedItems(field)];
+
+    if (action === 'restore') {
+      const protectedList = getProtectedItems(field);
+      let currentVal = field.value;
+      if (selectedText) {
+        for (const item of protectedList) {
+          if (selectedText.includes(item.currentToken) || item.currentToken === selectedText) {
+            currentVal = currentVal.split(item.currentToken).join(item.originalRawText);
+            removeProtectedItem(field, item.id);
+          }
+        }
+      } else {
+        for (const item of protectedList) {
+          currentVal = currentVal.split(item.currentToken).join(item.originalRawText);
+        }
+        setProtectedItems(field, []);
+      }
+      inputObserver.setFieldText(field, currentVal);
+      pushUndo({
+        kind: 'field',
+        element: field,
+        previousText: previousVal,
+        previousProtected: previousProt,
+        resultText: currentVal
+      });
+      const newFindings = ruleMatcher.match(currentVal);
+      const bounds = field.getBoundingClientRect();
+      const updatedList = getProtectedItems(field);
+      inputIndicator.update(field, newFindings, bounds, updatedList);
+      inputHighlighter.update(field, newFindings);
+      return;
+    }
+
+    if (!selectedText) {
+      if (action === 'placeholder') sanitizeActiveField('semantic_placeholder');
+      else if (action === 'dummy') sanitizeActiveField('synthetic_dummy');
+      return;
+    }
+
+    const matches = ruleMatcher.match(selectedText);
+    const category: FindingCategory = matches.length > 0 ? matches[0].category : 'custom_sensitive';
+    const findingId = `field_manual_${Date.now()}`;
+    const dummyFinding: SensitiveFinding = {
+      id: findingId,
+      label: matches.length > 0 ? matches[0].label : 'Selected Text',
+      category,
+      rawText: selectedText,
+      start: 0,
+      end: selectedText.length,
+      severity: matches.length > 0 ? matches[0].severity : 'critical',
+      source: 'regex_rule',
+      confidence: 1.0,
+      suggestedReplacement: `[${category.toUpperCase()}]`
+    };
+
+    const strategy: RepairStrategyType = action === 'dummy' ? 'synthetic_dummy' : 'semantic_placeholder';
+    const replacement = privacyReplacer.generateReplacement(dummyFinding, strategy, 0);
+
+    if (start < end) {
+      field.setRangeText(replacement, start, end, 'end');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      const newText = field.value.replace(selectedText, replacement);
+      inputObserver.setFieldText(field, newText);
+    }
+
+    addOrUpdateProtectedItem(field, {
+      id: findingId,
+      category,
+      label: dummyFinding.label,
+      originalRawText: selectedText,
+      currentToken: replacement,
+      currentStrategy: strategy,
+      entityIndex: 1
+    });
+
+    const updatedText = inputObserver.extractFieldText(field);
+    pushUndo({
+      kind: 'field',
+      element: field,
+      previousText: previousVal,
+      previousProtected: previousProt,
+      resultText: updatedText
+    });
+    const newFindings = ruleMatcher.match(updatedText);
+    const bounds = field.getBoundingClientRect();
+    const updatedList = getProtectedItems(field);
+    inputIndicator.update(field, newFindings, bounds, updatedList);
+    inputHighlighter.update(field, newFindings);
+    return;
+  }
+
+  // 2. Contenteditable Context
+  if (pendingFieldElement && pendingFieldElement.isContentEditable) {
+    const el = pendingFieldElement;
+    if (action === 'placeholder' || action === 'dummy') {
+      const strategy: RepairStrategyType = action === 'dummy' ? 'synthetic_dummy' : 'semantic_placeholder';
+      const curText = inputObserver.extractFieldText(el);
+      const matches = selectionText ? ruleMatcher.match(selectionText) : [];
+      const category: FindingCategory = matches.length > 0 ? matches[0].category : 'custom_sensitive';
+      const targetText = selectionText || curText;
+      const dummyFinding: SensitiveFinding = {
+        id: `ce_manual_${Date.now()}`,
+        label: 'Sensitive Text',
+        category,
+        rawText: targetText,
+        start: 0,
+        end: targetText.length,
+        severity: 'critical',
+        source: 'regex_rule',
+        confidence: 1.0,
+        suggestedReplacement: `[${category.toUpperCase()}]`
+      };
+      const replacement = privacyReplacer.generateReplacement(dummyFinding, strategy, 0);
+      if (pendingSelectionRange && !pendingSelectionRange.collapsed) {
+        pendingSelectionRange.deleteContents();
+        pendingSelectionRange.insertNode(document.createTextNode(replacement));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      } else if (selectionText && curText.includes(selectionText)) {
+        inputObserver.setFieldText(el, curText.replace(selectionText, replacement));
+      }
+    }
+    return;
+  }
+
+  // 3. Right-clicked on an existing .pl-finding span
+  if (pendingFindingElement && pendingFindingElement.isConnected) {
+    const isManual = pendingFindingElement.hasAttribute('data-pl-manual');
+    const wasAltered = isTextAltered(pendingFindingElement);
+    const previousEffect = getElementCurrentEffect(pendingFindingElement);
+
+    if (isManual) {
+      pushUndo({
+        kind: 'page_manual',
+        element: pendingFindingElement,
+        action: action as Action
+      });
+      applyAction({ kind: 'text', element: pendingFindingElement }, action as Action);
+      return;
+    }
+
+    pushUndo({
+      kind: 'page_finding',
+      element: pendingFindingElement,
+      previousAltered: wasAltered,
+      previousEffect: previousEffect
+    });
+
+    if (action === 'restore') {
+      applyAction({ kind: 'text', element: pendingFindingElement }, 'restore');
+    } else if (action === 'blur' || action === 'dummy' || action === 'placeholder' || action === 'spoiler') {
+      applyAction({ kind: 'text', element: pendingFindingElement }, action);
+    }
+    return;
+  }
+
+  // 4. Highlighted text selection on the webpage
+  if (pendingSelectionRange && !pendingSelectionRange.collapsed && pendingSelectionRange.commonAncestorContainer.isConnected) {
+    const range = pendingSelectionRange;
+    const parentFinding = range.commonAncestorContainer instanceof HTMLElement 
+      ? range.commonAncestorContainer.closest('.pl-finding')
+      : range.commonAncestorContainer.parentElement?.closest('.pl-finding');
+
+    if (parentFinding instanceof HTMLElement) {
+      const isManual = parentFinding.hasAttribute('data-pl-manual');
+      const wasAltered = isTextAltered(parentFinding);
+      const previousEffect = getElementCurrentEffect(parentFinding);
+
+      if (isManual) {
+        pushUndo({
+          kind: 'page_manual',
+          element: parentFinding,
+          action: action as Action
+        });
+        applyAction({ kind: 'text', element: parentFinding }, action as Action);
+        return;
+      }
+
+      pushUndo({
+        kind: 'page_finding',
+        element: parentFinding,
+        previousAltered: wasAltered,
+        previousEffect: previousEffect
+      });
+
+      if (action === 'restore') {
+        applyAction({ kind: 'text', element: parentFinding }, 'restore');
+      } else if (action === 'blur' || action === 'dummy' || action === 'placeholder' || action === 'spoiler') {
+        applyAction({ kind: 'text', element: parentFinding }, action);
+      }
+      return;
+    }
+
+    const span = wrapSelection(range);
+    if (span) {
+      window.getSelection()?.removeAllRanges();
+      pushUndo({
+        kind: 'page_manual',
+        element: span,
+        action: action as Action
+      });
+      if (action === 'restore') {
+        applyAction({ kind: 'text', element: span }, 'restore');
+      } else if (action === 'blur' || action === 'dummy' || action === 'placeholder' || action === 'spoiler') {
+        applyAction({ kind: 'text', element: span }, action);
+      }
+    }
+  }
+}
+
+chrome.runtime.onMessage.addListener((message: { kind?: string; action?: string; selectionText?: string }, _sender, respond) => {
+  if (message.kind === 'CONTEXT_MENU_ACTION' && message.action) {
+    handleContextMenuAction(message.action, message.selectionText || '');
+    respond({ ok: true });
+    return true;
+  }
   if (message.kind === 'SCAN_AI') {
     void scanAi(true).then(respond);
     return true;
@@ -995,6 +1488,12 @@ chrome.storage.onChanged.addListener(changes => {
     selectedEffect = changes.defaultEffect.newValue;
     activeHintFinding = null;
     hint.classList.remove('show');
+    // Re-sync active focused input field if it has protected items
+    const strategy: RepairStrategyType = selectedEffect === 'dummy' ? 'synthetic_dummy' : 'semantic_placeholder';
+    const activeElement = inputObserver.getActiveElement();
+    if (activeElement && activeElement.isConnected && getProtectedItems(activeElement).length > 0) {
+      sanitizeActiveField(strategy);
+    }
   }
   if (changes.hideByDefault) hideByDefault = changes.hideByDefault.newValue === true;
   const categoriesChanged = categoryKeys.some(category => storageCategoryKey(category) in changes);
@@ -1005,8 +1504,8 @@ chrome.storage.onChanged.addListener(changes => {
     }
     refreshHighlights();
   }
-  if (changes.hideByDefault || (effectChanged && hideByDefault)) {
-    syncAutomaticMasking(effectChanged, !!changes.hideByDefault);
+  if (changes.hideByDefault || effectChanged || categoriesChanged) {
+    syncAutomaticMasking(effectChanged, hideByDefault);
   }
   if (!categoriesChanged && !changes.cloudEnabled && !changes.apiKey) return;
   clearTimeout(aiSettingsTimer);

@@ -21,24 +21,13 @@
         <span class="nav-spacer" aria-hidden="true"></span>
       </div>
       <div class="app-identity">
+        <img class="app-logo" src="icons/tekasend-logo.svg" alt="TekaSend shield and paper-plane logo">
         <h1 class="app-title">TekaSend</h1>
       </div>
     </header>
 
     <!-- Main settings groups -->
     <main class="content">
-
-      <section class="section" aria-label="Local AI model">
-        <p class="section-label">On-Device Detection</p>
-        <div class="card model-card">
-          <span class="row-icon model-icon" aria-hidden="true">✦</span>
-          <span class="model-title">Local AI model</span>
-          <div class="status-pill idle" id="aiStatusPill" role="status" aria-live="polite">
-            <span class="status-dot" id="aiStatusDot"></span>
-            <span class="status-label" id="aiStatusText">Checking local model…</span>
-          </div>
-        </div>
-      </section>
 
       <section class="section" aria-label="Masking effect">
         <p class="section-label">Masking Effect</p>
@@ -140,66 +129,6 @@
         </div>
       </section>
 
-      <section class="section" aria-label="Optional OpenAI fallback">
-        <p class="section-label">Optional Cloud Fallback</p>
-        <details class="card cloud-card">
-          <summary class="cloud-summary">
-            <span class="row-icon icon-cloud" aria-hidden="true">☁</span>
-            <span class="cloud-summary-title">OpenAI if local AI fails</span>
-            <span id="cloudState" class="cloud-state">Off</span>
-            <span class="chevron" aria-hidden="true">›</span>
-          </summary>
-          <div class="cloud-fields">
-            <p class="cloud-copy">Off by default. If enabled and local AI fails, TekaSend sends up to 5,000 characters of page or pasted text to OpenAI. API usage may cost money.</p>
-            <label class="cloud-toggle-row" for="cloudEnabled">
-              <span>Enable OpenAI fallback</span>
-              <input type="checkbox" id="cloudEnabled" class="toggle">
-            </label>
-            <label class="cloud-key-label" for="cloudApiKey">OpenAI API key</label>
-            <input type="password" id="cloudApiKey" class="cloud-key-input" placeholder="sk-…" autocomplete="off" spellcheck="false">
-            <div class="cloud-actions">
-              <button type="button" id="saveCloud" class="cloud-save">Save settings</button>
-              <button type="button" id="clearCloud" class="cloud-clear">Remove key</button>
-            </div>
-            <p id="cloudFeedback" class="cloud-feedback" role="status" aria-live="polite"></p>
-          </div>
-        </details>
-      </section>
-
-      <!-- Scan Results Card -->
-      <section class="section" aria-label="Scan results" id="resultsSection">
-        <p class="section-label">Last Scan</p>
-        <div class="card results-card" id="resultsCard">
-          <!-- Empty state -->
-          <div id="resultsEmpty" class="results-empty">
-            <span class="row-icon icon-results" aria-hidden="true">✓</span>
-            <p class="results-empty-text">No scan run yet on this page</p>
-          </div>
-          <!-- Populated state (hidden by default) -->
-          <div id="resultsSummary" class="results-summary hidden">
-            <div class="results-headline">
-              <span class="results-count" id="resultsCount">0</span>
-              <span class="results-count-label" id="resultsCountLabel">findings</span>
-              <span class="results-badge" id="resultsBadge">Clean</span>
-            </div>
-            <div class="results-breakdown" id="resultsBreakdown">
-              <!-- Dynamically populated -->
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="section" aria-label="Page scan action">
-        <div class="card action-card">
-          <button type="button" id="scanPageBtn" class="btn-primary">
-            <span class="row-icon icon-scan" aria-hidden="true">⌕</span>
-            <span class="action-label">Scan Active Page</span>
-            <span class="chevron" aria-hidden="true">›</span>
-          </button>
-          <p id="statusFeedback" class="feedback" role="status" aria-live="polite"></p>
-        </div>
-      </section>
-
       <section class="section" aria-label="Appearance">
         <p class="section-label">Appearance</p>
         <div class="card appearance-card">
@@ -230,7 +159,7 @@
     </main>
 
     <footer class="app-footer">
-      <span class="footer-text">Local first. OpenAI is used only if enabled and local AI fails.</span>
+      <span class="footer-text">TekaSend • Real-time Privacy Guardian</span>
     </footer>
 
   </div>

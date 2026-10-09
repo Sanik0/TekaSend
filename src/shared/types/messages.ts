@@ -6,7 +6,6 @@
  */
 
 import {
-  FindingCategory,
   RepairDirective,
   RepairResult,
   RepairStrategyType,

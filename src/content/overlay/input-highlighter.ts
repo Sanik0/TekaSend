@@ -14,6 +14,7 @@
  */
 
 import { SensitiveFinding, RepairStrategyType, FindingCategory } from '../../ai/types.js';
+import { RiskAnalyzer } from '../../ai/reasoning/risk-analyzer.js';
 
 const STYLES_TO_COPY = [
   'fontFamily',
@@ -52,10 +53,10 @@ export class InputHighlighter {
   private readonly container: HTMLElement;
   private readonly mirror: HTMLElement;
   private readonly microTooltip: HTMLElement;
+  private readonly riskAnalyzer = new RiskAnalyzer();
   private activeElement: HTMLElement | null = null;
   private currentFindings: readonly SensitiveFinding[] = [];
   private onApplyRepair?: WordRepairCallback;
-  private activeHoverFinding: SensitiveFinding | null = null;
   private hideTooltipTimer = 0;
   private isTooltipPinned = false;
   private rafId = 0;
@@ -165,12 +166,34 @@ export class InputHighlighter {
     const computed = window.getComputedStyle(input);
     const isSingleLine = input instanceof HTMLInputElement;
 
-    // Synchronize mirror styling with target field
-    this.mirror.style.width = `${input.clientWidth}px`;
-    this.mirror.style.height = `${input.clientHeight}px`;
+    const padLeft = parseFloat(computed.paddingLeft) || 0;
+    const padRight = parseFloat(computed.paddingRight) || 0;
+    const padTop = parseFloat(computed.paddingTop) || 0;
+    const padBottom = parseFloat(computed.paddingBottom) || 0;
+    const borderLeft = parseFloat(computed.borderLeftWidth) || 0;
+    const borderTop = parseFloat(computed.borderTopWidth) || 0;
+
+    // Reset and synchronize mirror styling with target field
+    this.mirror.style.cssText = `
+      position: fixed !important;
+      top: -99999px !important;
+      left: -99999px !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+      opacity: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border: 0 !important;
+      box-sizing: content-box !important;
+    `;
+
     for (const prop of STYLES_TO_COPY) {
+      if (prop.startsWith('padding') || prop.startsWith('border') || prop === 'boxSizing') continue;
       (this.mirror.style as unknown as Record<string, string>)[prop] = computed[prop as keyof CSSStyleDeclaration] as string;
     }
+
+    const contentWidth = Math.max(0, input.clientWidth - padLeft - padRight);
+    this.mirror.style.width = isSingleLine ? 'auto' : `${contentWidth}px`;
     this.mirror.style.whiteSpace = isSingleLine ? 'pre' : 'pre-wrap';
     this.mirror.style.wordBreak = 'break-word';
     this.mirror.style.overflowWrap = 'break-word';
@@ -204,33 +227,49 @@ export class InputHighlighter {
     const scrollLeft = input.scrollLeft;
     const scrollTop = input.scrollTop;
 
+    // Compute vertical alignment for single-line input
+    const inputContentHeight = input.clientHeight - padTop - padBottom;
+
     // Create highlight rectangles
     for (const [finding, spans] of spanMap.entries()) {
       for (const span of spans) {
         const clientRects = span.getClientRects();
         for (const rect of Array.from(clientRects)) {
-          const relLeft = rect.left - mirrorRect.left - scrollLeft;
-          const relTop = rect.top - mirrorRect.top - scrollTop;
+          const relLeft = rect.left - mirrorRect.left;
+          const relTop = rect.top - mirrorRect.top;
 
-          const screenLeft = bounds.left + relLeft;
-          const screenTop = bounds.top + relTop;
+          let screenLeft = bounds.left + borderLeft + padLeft + relLeft - scrollLeft;
+          let screenTop: number;
+
+          if (isSingleLine) {
+            const verticalOffset = Math.max(0, (inputContentHeight - rect.height) / 2);
+            screenTop = bounds.top + borderTop + padTop + verticalOffset + relTop;
+          } else {
+            screenTop = bounds.top + borderTop + padTop + relTop - scrollTop;
+          }
+
           const width = rect.width;
           const height = rect.height;
 
-          // Clip highlights inside the input bounds
+          // Clip highlights inside the input inner bounds
+          const innerLeft = bounds.left + borderLeft;
+          const innerRight = bounds.right - (parseFloat(computed.borderRightWidth) || 0);
+          const innerTop = bounds.top + borderTop;
+          const innerBottom = bounds.bottom - (parseFloat(computed.borderBottomWidth) || 0);
+
           if (
-            screenLeft + width < bounds.left ||
-            screenLeft > bounds.right ||
-            screenTop + height < bounds.top ||
-            screenTop > bounds.bottom
+            screenLeft + width < innerLeft ||
+            screenLeft > innerRight ||
+            screenTop + height < innerTop ||
+            screenTop > innerBottom
           ) {
             continue;
           }
 
-          const clippedLeft = Math.max(bounds.left + 2, screenLeft);
-          const clippedRight = Math.min(bounds.right - 2, screenLeft + width);
-          const clippedTop = Math.max(bounds.top + 2, screenTop);
-          const clippedBottom = Math.min(bounds.bottom - 2, screenTop + height);
+          const clippedLeft = Math.max(innerLeft, screenLeft);
+          const clippedRight = Math.min(innerRight, screenLeft + width);
+          const clippedTop = Math.max(innerTop, screenTop);
+          const clippedBottom = Math.min(innerBottom, screenTop + height);
 
           if (clippedRight <= clippedLeft || clippedBottom <= clippedTop) {
             continue;
@@ -256,34 +295,54 @@ export class InputHighlighter {
     bounds: DOMRect,
     findings: readonly SensitiveFinding[]
   ): void {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const textNodes: { node: Text; start: number; end: number }[] = [];
+    let combinedText = '';
     let currentOffset = 0;
 
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let currentNode: Node | null;
     while ((currentNode = walker.nextNode())) {
       const textNode = currentNode as Text;
-      const len = textNode.nodeValue?.length || 0;
-      if (len > 0) {
+      const textVal = textNode.nodeValue || '';
+      if (textVal.length > 0) {
         textNodes.push({
           node: textNode,
           start: currentOffset,
-          end: currentOffset + len
+          end: currentOffset + textVal.length
         });
-        currentOffset += len;
+        combinedText += textVal;
+        currentOffset += textVal.length;
       }
     }
 
+    if (textNodes.length === 0 || combinedText.length === 0) return;
+
+    let searchPointer = 0;
+
     for (const finding of findings) {
-      const startNodeInfo = textNodes.find(tn => finding.start >= tn.start && finding.start < tn.end);
-      const endNodeInfo = textNodes.find(tn => finding.end > tn.start && finding.end <= tn.end) || textNodes[textNodes.length - 1];
+      const targetText = finding.rawText;
+      if (!targetText) continue;
+
+      let matchIndex = combinedText.indexOf(targetText, searchPointer);
+      if (matchIndex === -1) {
+        matchIndex = combinedText.indexOf(targetText, 0);
+      }
+
+      if (matchIndex === -1) continue;
+
+      const matchStart = matchIndex;
+      const matchEnd = matchStart + targetText.length;
+      searchPointer = matchEnd;
+
+      const startNodeInfo = textNodes.find(tn => matchStart >= tn.start && matchStart < tn.end);
+      const endNodeInfo = textNodes.find(tn => matchEnd > tn.start && matchEnd <= tn.end) || textNodes[textNodes.length - 1];
 
       if (!startNodeInfo || !endNodeInfo) continue;
 
       try {
         const range = document.createRange();
-        range.setStart(startNodeInfo.node, finding.start - startNodeInfo.start);
-        range.setEnd(endNodeInfo.node, Math.min(finding.end - endNodeInfo.start, endNodeInfo.node.nodeValue?.length || 0));
+        range.setStart(startNodeInfo.node, matchStart - startNodeInfo.start);
+        range.setEnd(endNodeInfo.node, Math.min(matchEnd - endNodeInfo.start, endNodeInfo.node.nodeValue?.length || 0));
 
         const rects = range.getClientRects();
         for (const rect of Array.from(rects)) {
@@ -390,16 +449,16 @@ export class InputHighlighter {
    * Displays the sleek iOS Direct Word Micro-Tooltip right above the highlighted word.
    */
   private showMicroTooltip(finding: SensitiveFinding, rect: DOMRect): void {
-    this.activeHoverFinding = finding;
     clearTimeout(this.hideTooltipTimer);
 
     const isCritical = finding.severity === 'critical' || finding.severity === 'high';
     const categoryLabel = this.getCategoryLabel(finding.category);
+    const risk = this.riskAnalyzer.analyzeRisk(finding.category, finding.rawText, finding.severity);
 
     this.microTooltip.innerHTML = `
-      <span class="ts-micro-badge ${isCritical ? 'critical' : 'medium'}">${categoryLabel}</span>
-      <button type="button" class="ts-micro-btn primary" id="tsMicroPlaceholder">Placeholder</button>
-      <button type="button" class="ts-micro-btn secondary" id="tsMicroScramble">Scramble</button>
+      <span class="ts-micro-badge ${isCritical ? 'critical' : 'medium'}" title="${risk.explanation}">${categoryLabel}</span>
+      <button type="button" class="ts-micro-btn primary" id="tsMicroPlaceholder" title="Mask with safe [${finding.category.toUpperCase()}] placeholder token">Placeholder</button>
+      <button type="button" class="ts-micro-btn secondary" id="tsMicroScramble" title="Mask with realistic format-preserving dummy text">Scramble</button>
     `;
 
     const placeholderBtn = this.microTooltip.querySelector('#tsMicroPlaceholder');
@@ -434,9 +493,9 @@ export class InputHighlighter {
       }
     });
 
-    // Position micro-pill centrally above the word
+    // Position micro-pill centrally above the word with viewport bounds protection
     this.microTooltip.classList.add('show');
-    const tooltipWidth = 195;
+    const tooltipWidth = Math.min(210, window.innerWidth - 16);
     const tooltipHeight = 32;
 
     const left = Math.max(
@@ -444,10 +503,12 @@ export class InputHighlighter {
       Math.min(rect.left + (rect.width - tooltipWidth) / 2, window.innerWidth - tooltipWidth - 8)
     );
 
-    const placeAbove = rect.top >= tooltipHeight + 8;
-    const top = placeAbove
+    const placeAbove = rect.top >= tooltipHeight + 10;
+    let top = placeAbove
       ? rect.top - tooltipHeight - 6
       : rect.bottom + 6;
+
+    top = Math.max(8, Math.min(top, window.innerHeight - tooltipHeight - 8));
 
     this.microTooltip.classList.toggle('place-below', !placeAbove);
     this.microTooltip.style.left = `${left}px`;
@@ -464,7 +525,6 @@ export class InputHighlighter {
 
   private hideMicroTooltip(): void {
     this.microTooltip.classList.remove('show');
-    this.activeHoverFinding = null;
     this.isTooltipPinned = false;
   }
 
@@ -473,6 +533,11 @@ export class InputHighlighter {
     window.addEventListener('scroll', repositionHandler, { passive: true });
     window.addEventListener('resize', repositionHandler, { passive: true });
     document.addEventListener('scroll', repositionHandler, { capture: true, passive: true });
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', repositionHandler, { passive: true });
+      window.visualViewport.addEventListener('scroll', repositionHandler, { passive: true });
+    }
 
     this.microTooltip.addEventListener('mouseenter', () => {
       clearTimeout(this.hideTooltipTimer);
@@ -513,24 +578,24 @@ export class InputHighlighter {
         pointer-events: auto !important;
         cursor: pointer !important;
         border-radius: 3px;
+        mix-blend-mode: multiply !important;
         transition: background-color 0.12s ease, opacity 0.12s ease;
-        mix-blend-mode: multiply;
       }
 
       .ts-infield-highlight:hover {
-        filter: brightness(0.95);
+        filter: brightness(0.92);
       }
 
       /* Critical & High Risk: Light iOS Red */
       .ts-infield-highlight.ts-hl-critical {
-        background: rgba(255, 59, 48, 0.20) !important;
-        box-shadow: inset 0 0 0 1px rgba(255, 59, 48, 0.40), 0 1px 2px rgba(255, 59, 48, 0.15) !important;
+        background: rgba(255, 59, 48, 0.18) !important;
+        box-shadow: none !important;
       }
 
       /* Medium & Low Risk: Light iOS Yellow / Amber */
       .ts-infield-highlight.ts-hl-medium {
-        background: rgba(255, 204, 0, 0.25) !important;
-        box-shadow: inset 0 0 0 1px rgba(255, 204, 0, 0.50), 0 1px 2px rgba(255, 204, 0, 0.15) !important;
+        background: rgba(255, 204, 0, 0.22) !important;
+        box-shadow: none !important;
       }
 
       /* Measurement mirror (hidden offscreen) */
@@ -627,33 +692,34 @@ export class InputHighlighter {
       }
 
       .ts-micro-btn {
-        background: #5856d6;
+        background: var(--ts-blue, #007aff);
         color: #ffffff;
         border: none;
-        border-radius: 5px;
-        padding: 4px 7px;
+        border-radius: 6px;
+        padding: 4px 8px;
         font-size: 10px;
         font-weight: 600;
+        font-family: inherit;
         cursor: pointer !important;
         display: flex;
         align-items: center;
         gap: 3px;
-        transition: opacity 0.12s ease;
+        transition: background 0.15s ease, transform 0.15s ease;
         white-space: nowrap;
       }
 
       .ts-micro-btn:hover {
-        opacity: 0.90;
+        background: var(--ts-blue-hover, #0a84ff);
       }
 
       .ts-micro-btn.secondary {
-        background: #f2f2f7;
-        color: #1c1c1e;
-        border: 1px solid rgba(60, 60, 67, 0.14);
+        background: var(--ts-card, #ffffff);
+        color: var(--ts-text, #1c1c1e);
+        border: 1px solid var(--ts-border-mid, rgba(60, 60, 67, 0.16));
       }
 
       .ts-micro-btn.secondary:hover {
-        background: #e5e5ea;
+        background: var(--ts-control, rgba(120, 120, 128, 0.12));
       }
     `;
     this.shadow.append(style);

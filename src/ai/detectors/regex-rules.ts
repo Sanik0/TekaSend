@@ -89,6 +89,15 @@ export class DeterministicRuleMatcher {
       regex: /(?:\+?63[\s-]?)?0?9\d{2}[\s-]?\d{3}[\s-]?\d{4}\b/g,
       defaultReplacement: "0917-000-0000",
     },
+    // Standard Street Addresses (Number + Street Name + Suffix)
+    {
+      category: "address",
+      label: "Street Address",
+      severity: "medium",
+      regex:
+        /\b\d{1,6}[A-Za-z]?\s+(?:[A-Za-z0-9.-]+\s+){1,4}(?:Street|St\.?|Avenue|Ave\.?|Boulevard|Blvd\.?|Road|Rd\.?|Drive|Dr\.?|Lane|Ln\.?|Way|Court|Ct\.?|Circle|Cir\.?|Highway|Hwy\.?|Place|Pl\.?|Square|Sq\.?|Parkway|Pkwy\.?|Terrace|Ter\.?|Trail|Trl\.?|Broadway)\b/gi,
+      defaultReplacement: "123 Demo St., Sample City",
+    },
     // IPv4 Addresses
     {
       category: "ip_address",
@@ -118,26 +127,30 @@ export class DeterministicRuleMatcher {
       rule.regex.lastIndex = 0;
 
       for (const match of text.matchAll(rule.regex)) {
-        const rawMatchText: string = match[0];
-        const startIndex: number | undefined = match.index;
+        if (match.index === undefined) {
+          continue;
+        }
 
-        if (!rawMatchText || startIndex === undefined) {
+        const targetValue = match[1] ?? match[0];
+        if (!targetValue) {
           continue;
         }
 
         // Skip intentional placeholders, scrambled dummies, and masked tokens
-        if (this.isSafePlaceholderOrDummy(rawMatchText, rule.category)) {
+        if (this.isSafePlaceholderOrDummy(targetValue, rule.category)) {
           continue;
         }
 
-        const endIndex: number = startIndex + rawMatchText.length;
+        const offset = match[1] ? match[0].indexOf(match[1]) : 0;
+        const startIndex: number = match.index + offset;
+        const endIndex: number = startIndex + targetValue.length;
         const findingId: string = `rule_${rule.category}_${startIndex}_${endIndex}`;
 
         matchedFindings.push({
           id: findingId,
           label: rule.label,
           category: rule.category,
-          rawText: rawMatchText,
+          rawText: targetValue,
           start: startIndex,
           end: endIndex,
           severity: rule.severity,
@@ -173,7 +186,22 @@ export class DeterministicRuleMatcher {
     rawText: string,
     category: FindingCategory,
   ): boolean {
-    const upper = rawText.toUpperCase();
+    const trimmed = rawText.trim();
+    const lower = trimmed.toLowerCase();
+    const upper = trimmed.toUpperCase();
+
+    // Ignore literal generic dictionary label words
+    const genericLabels = new Set([
+      "password", "passwords", "passwd", "pwd",
+      "name", "names", "fullname", "firstname", "lastname", "surname",
+      "api_key", "apikey", "api key", "secret_key", "client_secret",
+      "secret", "secrets", "token", "tokens", "auth_token",
+      "bearer", "bearer_token", "email", "email_address",
+      "phone", "phone_number", "ssn", "credit_card", "username"
+    ]);
+    if (genericLabels.has(lower)) {
+      return true;
+    }
 
     // Universal placeholder / dummy / masked markers
     if (
@@ -230,8 +258,15 @@ export class DeterministicRuleMatcher {
 
     if (category === "password") {
       if (
+        rawText.includes("dummy_password") ||
         rawText.includes("ExampleSecretPass") ||
-        rawText.includes("YOUR_PASSWORD")
+        rawText.includes("YOUR_PASSWORD") ||
+        upper.includes("EXAMPLE") ||
+        upper.includes("DEMO") ||
+        upper.includes("TEST") ||
+        upper.includes("SAMPLE") ||
+        upper.includes("DUMMY") ||
+        upper.includes("PLACEHOLDER")
       ) {
         return true;
       }

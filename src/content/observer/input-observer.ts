@@ -289,14 +289,6 @@ export class InputObserver {
     return null;
   }
 
-  /**
-   * Determines if a DOM element is an eligible editable text container.
-   * Explicitly excludes password fields to respect Section 4.1 security policy.
-   */
-  private isEligibleField(target: EventTarget | null): target is HTMLElement {
-    return this.resolveEligibleField(target) !== null;
-  }
-
   public getActiveField(): HTMLElement | null {
     return this.activeElement;
   }

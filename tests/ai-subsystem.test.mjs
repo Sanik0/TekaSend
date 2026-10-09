@@ -32,17 +32,19 @@ after(async () => {
   } catch {}
 });
 
-test("DeterministicRuleMatcher detects API keys, emails, passwords, and phones accurately", () => {
+test("DeterministicRuleMatcher detects API keys, emails, passwords, phones, and street addresses accurately", () => {
   const matcher = new DeterministicRuleMatcher();
   const text =
-    "Here is my key: sk-proj-1234567890abcdef123456 and email test@example.com with phone 09171234567";
+    "Here is my key: sk-proj-1234567890abcdef123456, email test@example.com, phone 09171234567, and address 123 Oak Street";
   const findings = matcher.match(text);
 
-  assert.equal(findings.length, 3);
+  assert.equal(findings.length, 4);
   assert.equal(findings[0].category, "api_key");
   assert.equal(findings[0].severity, "critical");
   assert.equal(findings[1].category, "email");
   assert.equal(findings[2].category, "phone");
+  assert.equal(findings[3].category, "address");
+  assert.equal(findings[3].rawText, "123 Oak Street");
 });
 
 test("RiskAnalyzer provides tailored explanations and actions for API keys and credentials", () => {
@@ -91,7 +93,7 @@ test("PrivacyReplacer cleanly replaces findings with semantic placeholders witho
   // Since there is only 1 API key and 1 email, output clean unnumbered placeholders
   assert.equal(
     repairResult.sanitizedText,
-    "Connect with YOUR_API_KEY at [EMAIL_ADDRESS].",
+    "Connect with [API_KEY] at [EMAIL_ADDRESS].",
   );
   assert.equal(repairResult.replacementsCount, 2);
 });
@@ -104,7 +106,7 @@ test("LocalRepairVerifier passes when all secrets are removed and catches remain
   const findings = matcher.match(originalText);
 
   // Clean repaired text
-  const cleanText = "Secret key YOUR_API_KEY leaked!";
+  const cleanText = "Secret key [API_KEY] leaked!";
   const cleanVerification = verifier.verify(cleanText, findings);
   assert.equal(cleanVerification.isClean, true);
   assert.equal(cleanVerification.leakedFindings.length, 0);
@@ -187,7 +189,7 @@ test("Repaired placeholders and scrambled dummies do not re-trigger false positi
   );
   assert.equal(
     placeholderResult.sanitizedText,
-    "My OpenAI API key is YOUR_API_KEY and email is [EMAIL_ADDRESS]",
+    "My OpenAI API key is [API_KEY] and email is [EMAIL_ADDRESS]",
   );
   const afterPlaceholderFindings = matcher.match(
     placeholderResult.sanitizedText,
@@ -270,7 +272,7 @@ test("Protection re-transformation supports seamless switching between Placehold
 
   assert.equal(initialFindings.length, 1);
 
-  // 1. Initial repair: Placeholder (single entity -> clean unnumbered YOUR_API_KEY)
+  // 1. Initial repair: Placeholder (single entity -> clean unnumbered [API_KEY])
   const placeholderRepair = replacer.replace(
     initialText,
     initialFindings,
@@ -279,7 +281,7 @@ test("Protection re-transformation supports seamless switching between Placehold
   );
   assert.equal(
     placeholderRepair.sanitizedText,
-    "Check my key YOUR_API_KEY in production.",
+    "Check my key [API_KEY] in production.",
   );
 
   // 2. Switch strategy: Scramble
@@ -291,7 +293,7 @@ test("Protection re-transformation supports seamless switching between Placehold
     "synthetic_dummy",
   ).sanitizedText;
   const switchedToScramble = placeholderRepair.sanitizedText.replace(
-    "YOUR_API_KEY",
+    "[API_KEY]",
     scrambleToken,
   );
   assert.ok(switchedToScramble.includes("sk-proj-DEMO_KEY_"));
@@ -299,16 +301,16 @@ test("Protection re-transformation supports seamless switching between Placehold
   // 3. Switch back to Placeholder
   const switchedBackToPlaceholder = switchedToScramble.replace(
     scrambleToken,
-    "YOUR_API_KEY",
+    "[API_KEY]",
   );
   assert.equal(
     switchedBackToPlaceholder,
-    "Check my key YOUR_API_KEY in production.",
+    "Check my key [API_KEY] in production.",
   );
 
   // 4. Restore original
   const restoredText = switchedBackToPlaceholder.replace(
-    "YOUR_API_KEY",
+    "[API_KEY]",
     originalSecret,
   );
   assert.equal(restoredText, initialText);
@@ -499,4 +501,23 @@ test('hybrid scanner reports a full name as personal information without the mod
   const name = result.findings.find(item => item.category === 'person_name');
   assert.equal(name?.rawText, 'Olivia Chen');
   assert.equal(name?.severity, 'medium');
+});
+
+test('local model joins compound name tokens with particles into one finding', async () => {
+  const manager = { getPipeline: async () => async () => [
+    { entity_group: 'FIRSTNAME', score: 0.95, word: 'Juan', start: 0, end: 4 },
+    { entity_group: 'LASTNAME', score: 0.92, word: 'Cruz', start: 10, end: 14 }
+  ] };
+  const findings = await new AiClassifier(manager).classify('Juan dela Cruz');
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rawText, 'Juan dela Cruz');
+  assert.equal(findings[0].category, 'person_name');
+});
+
+test('HybridScanner strictly excludes capitalized UI text while preserving personal names', async () => {
+  const scanner = new HybridScanner();
+  const text = 'Click Submit Button on Next Step. Meeting with Dr. Michael Brown and Maria dela Cruz regarding the Privacy Policy.';
+  const result = await scanner.scan(text, { enableAi: false });
+  const nameTexts = result.findings.filter(f => f.category === 'person_name').map(f => f.rawText);
+  assert.deepEqual(nameTexts, ['Michael Brown', 'Maria dela Cruz']);
 });

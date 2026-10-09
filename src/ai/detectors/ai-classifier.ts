@@ -5,13 +5,13 @@
  * Satisfies PRD F1 (Data Awareness Notice: on-device AI classifier).
  */
 
-import { ModelPipelineManager, ProgressCallback } from '../engine/pipeline.js';
-import { hasPersonContext, isPlausiblePersonName } from '../../name-detect.js';
+import { ModelPipelineManager, ProgressCallback } from "../engine/pipeline.js";
+import { hasPersonContext, isPlausiblePersonName } from "../../name-detect.js";
 import {
   FindingCategory,
   FindingSeverity,
-  SensitiveFinding
-} from '../types.js';
+  SensitiveFinding,
+} from "../types.js";
 
 interface RawTokenOutput {
   readonly entity_group?: string;
@@ -26,7 +26,8 @@ export class AiClassifier {
   private readonly pipelineManager: ModelPipelineManager;
 
   public constructor(pipelineManager?: ModelPipelineManager) {
-    this.pipelineManager = pipelineManager ?? ModelPipelineManager.getInstance();
+    this.pipelineManager =
+      pipelineManager ?? ModelPipelineManager.getInstance();
   }
 
   /**
@@ -39,24 +40,28 @@ export class AiClassifier {
    */
   public async classify(
     text: string,
-    confidenceThreshold: number = 0.60,
-    onProgress?: ProgressCallback
+    confidenceThreshold: number = 0.6,
+    onProgress?: ProgressCallback,
   ): Promise<SensitiveFinding[]> {
-    if (!text || typeof text !== 'string' || text.trim().length === 0) {
+    if (!text || typeof text !== "string" || text.trim().length === 0) {
       return [];
     }
 
     const pipeline = await this.pipelineManager.getPipeline(onProgress);
     const rawResults = (await pipeline(text, {
-      ignore_labels: ['O'],
-      aggregation_strategy: 'simple'
+      ignore_labels: ["O"],
+      aggregation_strategy: "simple",
     })) as RawTokenOutput[] | RawTokenOutput;
 
     const tokenArray: RawTokenOutput[] = Array.isArray(rawResults)
       ? rawResults
       : [rawResults];
 
-    return this.transformTokensToFindings(tokenArray, text, confidenceThreshold);
+    return this.transformTokensToFindings(
+      tokenArray,
+      text,
+      confidenceThreshold,
+    );
   }
 
   /**
@@ -65,28 +70,41 @@ export class AiClassifier {
   private transformTokensToFindings(
     tokens: readonly RawTokenOutput[],
     sourceText: string,
-    threshold: number
+    threshold: number,
   ): SensitiveFinding[] {
     const findings: SensitiveFinding[] = [];
 
     for (const token of tokens) {
-      if (!token || typeof token.score !== 'number' || token.score < threshold) {
+      if (
+        !token ||
+        typeof token.score !== "number" ||
+        token.score < threshold
+      ) {
         continue;
       }
 
-      const entityTag: string = (token.entity_group || token.entity || '').toUpperCase();
-      if (!entityTag || entityTag === 'O') {
+      const entityTag: string = (
+        token.entity_group ||
+        token.entity ||
+        ""
+      ).toUpperCase();
+      if (!entityTag || entityTag === "O") {
         continue;
       }
 
-      const { category, severity, label, defaultReplacement } = this.mapEntityToMetadata(entityTag);
+      const { category, severity, label, defaultReplacement } =
+        this.mapEntityToMetadata(entityTag);
 
       // Resolve character start and end bounds
       let startIndex: number = token.start ?? -1;
       let endIndex: number = token.end ?? -1;
       let matchedText: string = token.word;
 
-      if (startIndex >= 0 && endIndex > startIndex && endIndex <= sourceText.length) {
+      if (
+        startIndex >= 0 &&
+        endIndex > startIndex &&
+        endIndex <= sourceText.length
+      ) {
         matchedText = sourceText.slice(startIndex, endIndex);
       } else if (matchedText && sourceText.includes(matchedText)) {
         startIndex = sourceText.indexOf(matchedText);
@@ -100,6 +118,20 @@ export class AiClassifier {
         continue;
       }
 
+      // Ignore generic dictionary keyword label words from being treated as secret findings
+      const lowerWord = matchedText.toLowerCase().trim();
+      const genericKeywords = new Set([
+        "password", "passwords", "passwd", "pwd",
+        "name", "names", "fullname", "firstname", "lastname", "surname",
+        "api_key", "apikey", "api key", "secret_key", "client_secret",
+        "secret", "secrets", "token", "tokens", "auth_token",
+        "bearer", "bearer_token", "email", "email_address",
+        "phone", "phone_number", "ssn", "credit_card", "username"
+      ]);
+      if (genericKeywords.has(lowerWord)) {
+        continue;
+      }
+
       findings.push({
         id: `ai_${category}_${startIndex}_${endIndex}`,
         label,
@@ -108,35 +140,87 @@ export class AiClassifier {
         start: startIndex,
         end: endIndex,
         severity,
-        source: 'ai_model',
+        source: "ai_model",
         confidence: Number(token.score.toFixed(4)),
-        suggestedReplacement: defaultReplacement
+        suggestedReplacement: defaultReplacement,
       });
     }
 
     findings.sort((a, b) => a.start - b.start);
     const merged: SensitiveFinding[] = [];
-    for (const finding of findings) {
+    for (let finding of findings) {
+      // If address finding has a preceding building/street number in source text, expand it to form a full address
+      if (finding.category === "address" && finding.start > 0) {
+        const textBefore = sourceText.slice(0, finding.start);
+        const streetNumMatch = textBefore.match(/\b(\d{1,6}[A-Za-z]?(?:-\d{1,6})?)\s+$/);
+        if (streetNumMatch) {
+          const actualNumStart = textBefore.lastIndexOf(streetNumMatch[1]);
+          if (actualNumStart >= 0) {
+            finding = {
+              ...finding,
+              id: `ai_address_${actualNumStart}_${finding.end}`,
+              rawText: sourceText.slice(actualNumStart, finding.end),
+              start: actualNumStart,
+            };
+          }
+        }
+      }
+
       const previous = merged[merged.length - 1];
-      const between = previous ? sourceText.slice(previous.end, finding.start) : '';
-      if (previous?.category === 'person_name' && finding.category === 'person_name' &&
-          finding.start >= previous.end && /^[ \t'’-]{0,3}$/u.test(between)) {
+      const between = previous
+        ? sourceText.slice(previous.end, finding.start)
+        : "";
+      const isNameParticleBetween =
+        /^(?:[ \t]+(?:de|del|dela|da|di|dos|des|van|von|la|le|san|santa))?[ \t'’-]{0,3}$/iu.test(
+          between,
+        );
+      const isAddressBetween = /^[ \t,.-]{0,4}$/.test(between);
+
+      if (
+        previous?.category === "person_name" &&
+        finding.category === "person_name" &&
+        finding.start >= previous.end &&
+        isNameParticleBetween
+      ) {
         merged[merged.length - 1] = {
           ...previous,
           id: `ai_person_name_${previous.start}_${finding.end}`,
           rawText: sourceText.slice(previous.start, finding.end),
           end: finding.end,
-          confidence: Math.min(previous.confidence, finding.confidence)
+          confidence: Math.min(previous.confidence, finding.confidence),
+        };
+      } else if (
+        previous?.category === "address" &&
+        finding.category === "address" &&
+        finding.start >= previous.end &&
+        isAddressBetween
+      ) {
+        merged[merged.length - 1] = {
+          ...previous,
+          id: `ai_address_${previous.start}_${finding.end}`,
+          rawText: sourceText.slice(previous.start, finding.end),
+          end: finding.end,
+          confidence: Math.min(previous.confidence, finding.confidence),
         };
       } else {
         merged.push(finding);
       }
     }
-    return merged.filter(finding => {
-      if (finding.category !== 'person_name') return true;
-      return isPlausiblePersonName(finding.rawText, sourceText, finding.start)
-        && (finding.confidence >= 0.85 ||
-          (finding.confidence >= 0.75 && hasPersonContext(sourceText, finding.start, finding.end)));
+    return merged.filter((finding) => {
+      // Ignore isolated small standalone numbers that defaulted to custom_sensitive
+      if (
+        finding.category === "custom_sensitive" &&
+        /^\d{1,6}$/.test(finding.rawText.trim())
+      ) {
+        return false;
+      }
+      if (finding.category !== "person_name") return true;
+      return (
+        isPlausiblePersonName(finding.rawText, sourceText, finding.start) &&
+        (finding.confidence >= 0.6 ||
+          (finding.confidence >= 0.45 &&
+            hasPersonContext(sourceText, finding.start, finding.end)))
+      );
     });
   }
 
@@ -149,31 +233,85 @@ export class AiClassifier {
     label: string;
     defaultReplacement: string;
   } {
-    if (tag.includes('EMAIL')) {
-      return { category: 'email', severity: 'medium', label: 'Email Address', defaultReplacement: '[EMAIL_ADDRESS]' };
+    if (tag.includes("EMAIL")) {
+      return {
+        category: "email",
+        severity: "medium",
+        label: "Email Address",
+        defaultReplacement: "[EMAIL_ADDRESS]",
+      };
     }
-    if (tag.includes('PHONE')) {
-      return { category: 'phone', severity: 'medium', label: 'Phone Number', defaultReplacement: '[PHONE_NUMBER]' };
+    if (tag.includes("PHONE")) {
+      return {
+        category: "phone",
+        severity: "medium",
+        label: "Phone Number",
+        defaultReplacement: "[PHONE_NUMBER]",
+      };
     }
-    if (tag.includes('SSN') || tag.includes('GOV') || tag.includes('TAX')) {
-      return { category: 'ssn', severity: 'critical', label: 'Government ID / SSN', defaultReplacement: '[SSN_NUMBER]' };
+    if (tag.includes("SSN") || tag.includes("GOV") || tag.includes("TAX")) {
+      return {
+        category: "ssn",
+        severity: "critical",
+        label: "Government ID / SSN",
+        defaultReplacement: "[SSN_NUMBER]",
+      };
     }
-    if (tag.includes('CARD') || tag.includes('CREDIT') || tag.includes('BANK')) {
-      return { category: 'credit_card', severity: 'critical', label: 'Payment Card / Account', defaultReplacement: '[CARD_NUMBER]' };
+    if (
+      tag.includes("CARD") ||
+      tag.includes("CREDIT") ||
+      tag.includes("BANK")
+    ) {
+      return {
+        category: "credit_card",
+        severity: "critical",
+        label: "Payment Card / Account",
+        defaultReplacement: "[CARD_NUMBER]",
+      };
     }
     if (/^(?:B-|I-)?(?:FIRSTNAME|MIDDLENAME|LASTNAME|PERSON|PER)$/.test(tag)) {
-      return { category: 'person_name', severity: 'medium', label: 'Personal Name', defaultReplacement: '[PERSON_NAME]' };
+      return {
+        category: "person_name",
+        severity: "medium",
+        label: "Personal Name",
+        defaultReplacement: "[PERSON_NAME]",
+      };
     }
-    if (tag.includes('LOC') || tag.includes('STREET') || tag.includes('CITY') || tag.includes('ADDRESS')) {
-      return { category: 'address', severity: 'low', label: 'Location / Address', defaultReplacement: '[STREET_ADDRESS]' };
+    if (
+      tag.includes("LOC") ||
+      tag.includes("STREET") ||
+      tag.includes("CITY") ||
+      tag.includes("ADDRESS")
+    ) {
+      return {
+        category: "address",
+        severity: "low",
+        label: "Location / Address",
+        defaultReplacement: "[STREET_ADDRESS]",
+      };
     }
-    if (tag.includes('IP') || tag.includes('HOST')) {
-      return { category: 'ip_address', severity: 'low', label: 'IP Address / Host', defaultReplacement: '[IP_ADDRESS]' };
+    if (tag.includes("IP") || tag.includes("HOST")) {
+      return {
+        category: "ip_address",
+        severity: "low",
+        label: "IP Address / Host",
+        defaultReplacement: "[IP_ADDRESS]",
+      };
     }
-    if (tag.includes('PASS') || tag.includes('KEY') || tag.includes('SECRET')) {
-      return { category: 'password', severity: 'critical', label: 'Credential / Secret', defaultReplacement: 'YOUR_SECRET' };
+    if (tag.includes("PASS") || tag.includes("KEY") || tag.includes("SECRET")) {
+      return {
+        category: "password",
+        severity: "critical",
+        label: "Credential / Secret",
+        defaultReplacement: "[PASSWORD]",
+      };
     }
 
-    return { category: 'custom_sensitive', severity: 'medium', label: 'Sensitive Info', defaultReplacement: '[REDACTED]' };
+    return {
+      category: "custom_sensitive",
+      severity: "medium",
+      label: "Sensitive Info",
+      defaultReplacement: "[REDACTED_SENSITIVE_DATA]",
+    };
   }
 }

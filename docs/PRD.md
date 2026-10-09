@@ -1,203 +1,123 @@
 # TekaSend — Product Requirements Document (PRD)
 
-_Tagline:_ Teka muna. Check bago send.
+**Tagline:** *Teka muna. Check bago send.*  
+**Product Type:** Local-AI-Powered Chrome Extension (Manifest V3)  
+**Target:** Hackathon MVP (AppBuildersPH 2026 — Local AI Track)  
+**Core Principle:** Detect, explain, repair, and protect confidential data locally on-device before users submit it to online AI models or web services.
 
-_Product type:_ Local-AI-powered Chrome extension  
-_Target:_ Hackathon MVP  
-_Primary principle:_ Detect, explain, repair, and protect sensitive information locally before users share it.
+---
 
 ## 1. Product Overview
 
-TekaSend is a privacy-focused Chrome extension that helps users prevent accidental disclosure of sensitive information when interacting with websites, AI chatbots, online forms, and visual content.
+TekaSend is a zero-trust, privacy-preserving Chrome extension that intercepts sensitive information—such as API keys, authentication tokens, passwords, and Personally Identifiable Information (PII)—before it is sent across the internet to AI chatbots, search engines, and web forms.
 
-It combines local AI classification, deterministic detection rules, context-aware text repair, user-selected visual redaction, and pre-sharing verification.
+By pairing an on-device neural transformer (`Shield-82M` via ONNX Runtime Web WASM) with sub-millisecond deterministic regex engines, TekaSend delivers real-time, zero-latency protection without transmitting user data to any external cloud server or remote API.
 
-TekaSend does not require user accounts, a backend server, or cloud AI inference for its core functionality.
+---
 
 ## 2. Problem Statement
 
-Users frequently paste API keys, credentials, personal information, and confidential text into online tools without realizing the risks. They may also expose private information in screenshots, website components, or screen-sharing sessions.
+With the rapid adoption of AI chatbots (ChatGPT, Claude, Gemini, DeepSeek, Cursor, Copilot), developers and professionals frequently paste logs, configuration files, source code, and customer records containing:
+- **High-Risk Secrets:** OpenAI/Anthropic/AWS/GitHub API keys, private keys, database credentials, passwords, auth tokens.
+- **Personally Identifiable Information (PII):** Full names, corporate email addresses, phone numbers, physical addresses, government IDs, and payment card numbers.
 
-Existing warnings may identify potential risks without providing a convenient way to repair the content.
+### The Cloud Privacy Paradox
+Relying on cloud-based privacy scanners requires users to transmit their plaintext secrets to a third-party server, introducing secondary breach risks, compliance violations (GDPR, DPA), and network latency. TekaSend solves this by keeping all detection, reasoning, and sanitization 100% on the user's local machine.
 
-TekaSend addresses this problem by helping users understand the risk, correct the content, and review the result before sharing.
+---
 
 ## 3. Target Users
 
-- Developers sharing code with AI chatbots.
-- Students and professionals using online forms and AI tools.
-- Employees sharing screenshots, dashboards, or confidential business information.
+- **Software Developers & Engineers:** Pasting terminal outputs, environment variables, API configs, and code snippets into AI chat assistants.
+- **Business Professionals & Students:** Drafting sensitive communications, entering personal details into public web forms, and interacting with generative AI.
+- **Enterprise Workers:** Preventing accidental data leaks and maintaining internal compliance during web browsing and screen-sharing sessions.
+
+---
 
 ## 4. Product Goals
 
-1. Detect supported sensitive information before submission.
-2. Explain why the detected information may be risky.
-3. Help users replace sensitive values while preserving useful context.
-4. Let users select website elements and image regions for visual protection.
-5. Verify proposed text repairs locally before user approval.
-6. Demonstrate genuine on-device AI inference without cloud AI APIs.
+1. **Sub-Millisecond Pre-Flight Detection:** Intercept sensitive data in active inputs and textareas in real-time as users type.
+2. **Contextual Risk Reasoning:** Explain to the user *why* specific detected information is dangerous to share.
+3. **1-Click Smart Privacy Repairs:** Provide format-preserving semantic placeholders and synthetic dummy text substitutions.
+4. **Referential Consistency:** Ensure repeated occurrences of the same secret reuse the same identifier, while distinct entities receive sequential numbering (e.g. `[EMAIL_ADDRESS_1]`, `[EMAIL_ADDRESS_2]`).
+5. **Zero-Trust Visual Page Masking:** Allow users to protect on-screen sensitive text via Blurs, Interactive Particle Spoilers, or Dummy values.
+6. **100% Local Execution:** Operate completely offline with zero telemetry, zero cloud inference, and zero user account requirements.
+
+---
 
 ## 5. Core Features
 
-### F1. Data Awareness Notice
+### F1. Data Awareness Notice & In-Field Indicator
+- **Real-Time In-Field Shield:** An unobtrusive status shield rendered inside prompt boxes and inputs dynamically reflecting risk severity (Safe, Warning, Critical).
+- **Sensitive Word Highlighting:** Non-intrusive, color-coded highlights rendered over sensitive words without altering input focus.
+- **Contextual Risk Reasoning:** Educational guidance breaking down why masking is necessary and recommending concrete mitigation actions.
 
-Detect potentially sensitive content in supported text fields before submission.
+### F2. Smart Privacy Repair (1-Click Sanitization)
+- **Semantic Placeholders:** Replaces secrets with safe category tokens (e.g., `[API_KEY]`, `[EMAIL_ADDRESS]`, `[PASSWORD]`).
+- **Synthetic Dummy Scrambling:** Replaces sensitive strings with format-preserving dummy text.
+- **Global & Individual Actions:** Supports both individual token repairs and one-click bulk sanitization (`Alt+P` for placeholders, `Alt+S` for scramble).
 
-Detection uses:
+### F3. Local Verification & Bi-Directional Protection Manager
+- **Zero-Leak Validation:** Verifies locally that all targeted secret strings have been eliminated before form submission.
+- **Strategy Switching:** Allows users to toggle between Placeholder and Scramble strategies on active protected items.
+- **Two-Way Restore & Undo:** Instant `Ctrl+Z` / `Cmd+Z` support to revert repairs and restore original content.
 
-- Deterministic rules for recognizable credentials, API keys, email addresses, phone numbers, and other supported patterns.
-- An on-device AI classifier for contextual assessment of potentially confidential text.
+### F4. Visual Webpage Privacy Guardian
+- **Passive Text Masking:** Automatically or manually masks sensitive page elements using:
+  - *Blur:* Soft CSS focus blur.
+  - *Particle Spoiler:* Dynamic WebGL/Canvas particle animation that scatters on hover.
+  - *Placeholder:* Structural token replacement.
+  - *Dummy:* Character-count-preserving dummy values.
 
-The warning identifies the suspected category, explains the potential risk, and offers appropriate next steps.
+### F5. Native iOS Settings Interface & User Control
+- **Preferences & Toggles:** Per-category detection toggles (API Keys, Passwords, Personal, Financial).
+- **Auto-Masking Controls:** Configurable default masking effects and hover tooltip visibility.
+- **Appearance Customization:** Clean iOS-styled popup with system, light, and dark mode support.
 
-Detection is advisory and is not guaranteed to identify every sensitive value.
+---
 
-### F2. Smart Privacy Repair
+## 6. Scope & Roadmap
 
-Offer user-approved replacements for detected sensitive values.
+### MVP Scope (Delivered)
+- Chrome Manifest V3 extension with isolated Content Scripts, Background Worker, and Offscreen Document.
+- 100% on-device neural inference using `Shield-82M` (ONNX WASM SIMD).
+- Deterministic regex matcher for credentials, tokens, PII, and Philippine mobile numbers.
+- In-field indicator, word highlighter micro-tooltips, and Data Awareness Notice card.
+- 1-click semantic placeholders and synthetic scrambling with referential consistency.
+- Real-time pre-flight verification and `Ctrl+Z` undo stack.
+- Passive DOM text masking (Blur, Spoiler particles, Dummy substitution).
+- Complete offline functionality with zero external API dependencies.
 
-Supported repair strategies:
+### Future Roadmap (Post-Hackathon)
+- **On-Device Computer Vision:** Local OCR and image redaction for bounding-box masking on photos and screenshots.
+- **Custom Regular Expressions:** User-defined custom secret patterns and enterprise DLP rules.
+- **Cross-Browser Support:** Firefox and Safari extension ports.
 
-- _Semantic placeholders:_ For example, replace an actual API key with YOUR_API_KEY.
-- _Clearly labeled dummy values:_ Use obvious test values where appropriate, ensuring they cannot be mistaken for working credentials or genuine personal information.
-- _Consistent placeholders:_ Use the same placeholder for repeated references to the same detected entity where supported.
+---
 
-The extension must preview changes and preserve surrounding content wherever possible.
+## 7. Technical Specifications
 
-### F3. Local Repair Verification
+| Component | Technology | Responsibility |
+|---|---|---|
+| **Extension Core** | Chrome Manifest V3, TypeScript | Lifecycle management, content script injection, Shadow DOM isolation |
+| **Neural Classifier** | ONNX Runtime Web (`ort-wasm-simd-threaded.wasm`), `Shield-82M` | On-device contextual PII and ambiguous entity classification |
+| **Offscreen Runtime** | Chrome Offscreen Document | Multi-threaded WASM execution offloading compute from the main thread |
+| **Deterministic Engine** | TypeScript Regex & Heuristics | Sub-millisecond secret detection (API keys, JWTs, AWS keys, passwords, PII) |
+| **UI Design System** | Native CSS Design Tokens | Clean iOS Settings design, glassmorphism, responsive light/dark themes |
+| **Canvas Shaders** | HTML5 Canvas / 2D Context | High-performance particle spoiler rendering |
 
-Before the user sends the repaired text, verify the proposed output.
+---
 
-The verification process checks:
+## 8. Success & Evaluation Criteria
 
-- Whether the exact detected sensitive values have been removed from the proposed outgoing text.
-- Whether the intended replacements were applied correctly.
-- Whether the surrounding content has been preserved sufficiently for review.
-- Whether additional detected sensitive values remain.
+1. **Detection Accuracy & Speed:** Deterministic rules trigger in `<0.1ms`; local neural classification executes in `<50ms`.
+2. **Zero-Leak Guarantee:** 100% of targeted sensitive values are eliminated upon one-click repair.
+3. **Referential Integrity:** Distinct entities receive sequential variable tags (`[EMAIL_ADDRESS_1]`, `[EMAIL_ADDRESS_2]`) while repeated mentions preserve identical placeholders.
+4. **Complete Data Privacy:** Zero network packets transmitted during scanning, repair, or verification.
+5. **Seamless User Experience:** Clean, responsive iOS interface that stays out of the user's way until confidential data is detected.
 
-Use deterministic checks for exact-value removal and replacement integrity. AI may assist with contextual assessment but must not be the sole authority for declaring content safe.
+---
 
-Display the verification result and its limitations. Never claim that an entire message is safe solely because the targeted values were removed.
+## 9. Product Definition Summary
 
-### F4. Visual Privacy Guardian
-
-Let users protect sensitive visual information before sharing.
-
-Supported actions:
-
-- Select supported website elements, such as visible text blocks, images, or profile pictures.
-- Manually select rectangular regions within an image.
-- Apply blur or solid redaction.
-- Preview and confirm the result before sharing or exporting a sanitized image.
-
-Use solid redaction for high-risk information such as credentials and account numbers.
-
-For exported images, apply redaction to the actual output pixels rather than relying on a reversible overlay. Do not claim that visual masking removes the underlying information from the original website or from screenshots already captured.
-
-### F5. User-Controlled Protection
-
-Let users choose which supported detection categories to enable and which visual elements or regions to protect.
-
-Users must be able to review, edit, approve, or cancel proposed changes.
-
-TekaSend must never silently replace content or submit a modified message without explicit user approval.
-
-## 6. Primary User Workflows
-
-### Text protection
-
-1. The user types or pastes text into a supported website field.
-2. TekaSend scans the supported content locally.
-3. If a potential risk is detected, the extension displays a warning and explanation.
-4. The user selects a suggested placeholder or dummy-value repair.
-5. TekaSend previews the modified text and verifies the targeted replacement.
-6. The user approves, edits, or cancels the proposed changes.
-7. The user submits the approved content through the supported website workflow.
-
-### Visual protection
-
-1. The user selects a website element or image region.
-2. The user chooses blur or solid redaction.
-3. TekaSend previews the protected result.
-4. The user confirms the change or cancels it.
-5. The user shares the protected webpage or exports the sanitized image, as supported.
-
-## 7. Local-AI and Privacy Requirements
-
-- Run the text classifier on the user's device.
-- Perform deterministic detection, repair, and verification locally.
-- Do not send scanned text, images, or detection results to a remote AI service.
-- Do not require a user account or application backend.
-- Do not store raw sensitive content in logs or persistent storage.
-- Request only the browser permissions necessary for supported functionality.
-- Never inspect password-field contents.
-- Clearly communicate unsupported websites, model limitations, and detection failures.
-- Handle model-loading failures without silently treating content as safe.
-
-Model weights may need to be downloaded initially. If the hackathon requires full offline installation, the model must be packaged locally or otherwise made available without a runtime network dependency. The core workflow must not rely on remote inference.
-
-## 8. MVP Scope and Constraints
-
-### In scope
-
-- Chrome Manifest V3 extension.
-- Supported text-field monitoring and pre-submission warnings.
-- Rule-based detection for common sensitive patterns.
-- A genuine on-device AI text classifier.
-- Placeholder and dummy-value replacement.
-- Local verification of targeted repairs.
-- Manual website-element and image-region selection.
-- Blur and solid redaction.
-- Review and approval before changes are applied or content is shared.
-- A repeatable live demonstration.
-
-### Out of scope
-
-- User accounts, subscriptions, and cloud dashboards.
-- Cloud AI inference or remote content-scanning APIs.
-- Automatic detection of every sensitive value, image, or website component.
-- Universal compatibility with every website and custom editor.
-- Training a large AI model from scratch.
-- Automatic submission without user approval.
-- Guaranteed protection against all information disclosure.
-
-## 9. Technical Direction
-
-- _Extension platform:_ Chrome Manifest V3.
-- _Application code:_ JavaScript or TypeScript.
-- _Interface:_ HTML, CSS, and JavaScript or TypeScript.
-- _Pattern detection:_ Local regular expressions and validation rules.
-- _AI inference:_ A compatible browser-based classifier, such as one implemented with Transformers.js, subject to testing.
-- _Storage:_ Minimal local settings only.
-- _Visual redaction:_ Browser DOM interaction and canvas-based image processing where appropriate.
-
-The implementation must support a limited, tested set of websites and fields rather than promise universal coverage.
-
-## 10. Success Criteria
-
-The MVP is considered complete when the team can demonstrate:
-
-1. A supported sensitive-text example triggering a warning.
-2. Genuine local AI inference on the device.
-3. Successful placeholder replacement with the surrounding content preserved.
-4. Verification that targeted sensitive values no longer appear in the proposed outgoing text.
-5. Successful manual selection and redaction of a visual region.
-6. User approval before modified content is submitted or exported.
-7. No transmission of scanned content to a remote AI service.
-8. Reliable execution of the complete demonstration.
-
-Evaluate the system using fictional test data, including both sensitive and harmless examples. Record detection precision, recall, false positives, repair success, and inference time where feasible.
-
-## 11. Product Differentiation
-
-TekaSend's intended contribution is a cohesive local-first privacy workflow that combines contextual detection, explainable warnings, context-preserving repair, targeted verification, and user-controlled visual protection.
-
-Individual capabilities may already exist in competing products. Do not claim that the product is the first of its kind without evidence.
-
-The team should demonstrate measurable quality, reliable implementation, and the practical benefits of keeping sensitive-content analysis on-device.
-
-## 12. Final Product Definition
-
-_TekaSend is a local-AI-powered Chrome extension that helps users detect, understand, repair, and visually protect sensitive information before sharing it online, without relying on cloud AI inference or requiring an account._
-
-_Product principle:_ Teka muna. Check bago send.
+> **TekaSend is a 100% on-device, zero-trust Chrome extension that empowers users to detect, understand, and sanitize confidential data before it leaks into cloud AI models, without relying on external cloud APIs or user accounts.**

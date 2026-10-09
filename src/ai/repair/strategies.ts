@@ -52,7 +52,7 @@ export class PrivacyReplacementStrategies {
   }
 
   /**
-   * Returns a clean semantic placeholder, only appending numbers when multiple distinct entities exist.
+   * Returns a clean semantic placeholder with [] brackets, appending numbers when multiple distinct entities exist.
    */
   private getSemanticPlaceholder(
     category: FindingCategory,
@@ -62,34 +62,30 @@ export class PrivacyReplacementStrategies {
 
     switch (category) {
       case "api_key":
-        return `YOUR_API_KEY${idxSuffix}`;
+        return `[API_KEY${idxSuffix}]`;
       case "private_key":
-        return `YOUR_PRIVATE_KEY${idxSuffix}`;
+        return `[PRIVATE_KEY${idxSuffix}]`;
       case "password":
-        return `YOUR_PASSWORD${idxSuffix}`;
+        return `[PASSWORD${idxSuffix}]`;
       case "bearer_token":
-        return `YOUR_AUTH_TOKEN${idxSuffix}`;
+        return `[AUTH_TOKEN${idxSuffix}]`;
       case "credit_card":
-        return index > 0
-          ? `[CREDIT_CARD_NUMBER_${index}]`
-          : "[CREDIT_CARD_NUMBER]";
+        return `[CREDIT_CARD_NUMBER${idxSuffix}]`;
       case "ssn":
-        return index > 0 ? `[SSN_NUMBER_${index}]` : "[SSN_NUMBER]";
+        return `[SSN_NUMBER${idxSuffix}]`;
       case "email":
-        return index > 0 ? `[EMAIL_ADDRESS_${index}]` : "[EMAIL_ADDRESS]";
+        return `[EMAIL_ADDRESS${idxSuffix}]`;
       case "phone":
-        return index > 0 ? `[PHONE_NUMBER_${index}]` : "[PHONE_NUMBER]";
+        return `[PHONE_NUMBER${idxSuffix}]`;
       case "person_name":
-        return index > 0 ? `[PERSON_NAME_${index}]` : "[PERSON_NAME]";
+        return `[PERSON_NAME${idxSuffix}]`;
       case "address":
-        return index > 0 ? `[STREET_ADDRESS_${index}]` : "[STREET_ADDRESS]";
+        return `[STREET_ADDRESS${idxSuffix}]`;
       case "ip_address":
-        return index > 0 ? `[IP_ADDRESS_${index}]` : "[IP_ADDRESS]";
+        return `[IP_ADDRESS${idxSuffix}]`;
       case "custom_sensitive":
       default:
-        return index > 0
-          ? `[REDACTED_SENSITIVE_DATA_${index}]`
-          : "[REDACTED_SENSITIVE_DATA]";
+        return `[REDACTED_SENSITIVE_DATA${idxSuffix}]`;
     }
   }
 
@@ -104,7 +100,7 @@ export class PrivacyReplacementStrategies {
         case "private_key":
           return "-----BEGIN PRIVATE KEY-----\n[DEMO_TEST_PRIVATE_KEY]\n-----END PRIVATE KEY-----";
         case "password":
-          return "ExampleSecretPass123!";
+          return "dummy_password_123!";
         case "bearer_token":
           return "Bearer DEMO_TEST_TOKEN_000000000000";
         case "credit_card":
@@ -133,7 +129,7 @@ export class PrivacyReplacementStrategies {
       case "private_key":
         return `-----BEGIN PRIVATE KEY-----\n[DEMO_TEST_PRIVATE_KEY_${index}]\n-----END PRIVATE KEY-----`;
       case "password":
-        return `ExampleSecretPass${index}!`;
+        return `dummy_password_${index}!`;
       case "bearer_token":
         return `Bearer DEMO_TEST_TOKEN_${index}_000000000000`;
       case "credit_card":

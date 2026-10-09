@@ -24,3 +24,18 @@ test('dummy text keeps the visible character count for symbols and emoji', () =>
   assert.equal(dummy[3], ' ');
   assert.notEqual(dummy, source);
 });
+
+test('dummy generation is referentially consistent (identical inputs yield identical scrambled text)', () => {
+  const source1 = 'alex@example.com';
+  const source2 = 'alex@example.com';
+  const diffSource = 'sam@demo.test';
+
+  const dummy1 = createDummyText(source1);
+  const dummy2 = createDummyText(source2);
+  const dummyDiff = createDummyText(diffSource);
+
+  assert.equal(dummy1, dummy2);
+  assert.notEqual(dummy1, dummyDiff);
+  assert.equal(dummy1.length, source1.length);
+});
+

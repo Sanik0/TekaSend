@@ -2,163 +2,692 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>TekaSend demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>TekaSend — local privacy demo</title>
     <style>
       :root {
-        font-family: system-ui;
-        color: #18243b;
-        background: #edf2f8;
+        color: #1c1c1e;
+        background: #eef4ff;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI",
+          sans-serif;
+        font-synthesis: none;
+      }
+
+      * {
+        box-sizing: border-box;
       }
       body {
-        max-width: 900px;
-        margin: 40px auto;
-        padding: 0 20px;
+        min-width: 320px;
+        margin: 0;
       }
-      header {
-        margin-bottom: 24px;
-      }
-      h1 {
-        margin-bottom: 4px;
-      }
-      .muted {
-        color: #66748c;
-      }
-      main {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 16px;
-      }
-      .card {
-        background: white;
-        padding: 20px;
-        border-radius: 14px;
-        box-shadow: 0 5px 24px #12234112;
-      }
-      h2 {
-        font-size: 17px;
-        margin-top: 0;
-      }
-      p {
-        line-height: 1.6;
-      }
-      .tag {
-        background: #edf1f8;
-        padding: 2px 5px;
-        border-radius: 4px;
-      }
-      textarea,
-      input {
-        box-sizing: border-box;
-        width: 100%;
-        font: 14px system-ui;
-        padding: 10px;
-        border: 1px solid #bbc7d8;
-        border-radius: 7px;
-        margin: 5px 0 12px;
-      }
-      textarea {
-        height: 100px;
-      }
-      img {
-        width: 100%;
-        border-radius: 10px;
+      button,
+      input,
+      [contenteditable] {
+        font: inherit;
       }
       button {
-        background: #29437f;
-        color: white;
-        border: 0;
-        padding: 9px 13px;
-        border-radius: 7px;
         cursor: pointer;
       }
-      @media (max-width: 700px) {
-        main {
+
+      .page-shell {
+        min-height: 100vh;
+        overflow: hidden;
+        padding: 28px;
+        background:
+          radial-gradient(circle at 14% 2%, #d3e4ff 0, transparent 28rem),
+          radial-gradient(circle at 88% 80%, #d7f7e8 0, transparent 27rem),
+          linear-gradient(145deg, #f8fbff, #edf4ff 54%, #f5fbf8);
+      }
+
+      .stage {
+        width: min(1180px, 100%);
+        min-height: calc(100vh - 56px);
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.82);
+        border-radius: 32px;
+        background: rgba(255, 255, 255, 0.72);
+        box-shadow:
+          0 28px 70px rgba(26, 63, 111, 0.16),
+          0 3px 12px rgba(25, 48, 80, 0.06);
+        backdrop-filter: blur(22px);
+      }
+
+      .chat {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+      }
+      .topbar {
+        min-height: 80px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 16px 24px;
+        border-bottom: 1px solid rgba(60, 60, 67, 0.09);
+      }
+      .brand,
+      .top-actions,
+      .assistant-meta,
+      .row {
+        display: flex;
+        align-items: center;
+      }
+      .brand {
+        gap: 12px;
+      }
+      .brand-mark {
+        width: 48px;
+        height: 48px;
+        filter: drop-shadow(0 8px 16px rgba(0, 122, 255, 0.18));
+      }
+      .brand-title {
+        font-size: 19px;
+        font-weight: 750;
+        letter-spacing: -0.3px;
+      }
+      .brand-subtitle {
+        margin-top: 3px;
+        color: #6c6c70;
+        font-size: 14px;
+      }
+      .top-actions {
+        gap: 8px;
+      }
+      .icon-button {
+        display: grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        color: #5c5c60;
+        border: 0;
+        border-radius: 50%;
+        background: rgba(118, 118, 128, 0.11);
+        transition:
+          transform 0.18s ease,
+          background 0.18s ease;
+      }
+      .icon-button:hover {
+        transform: translateY(-1px);
+        background: rgba(118, 118, 128, 0.18);
+      }
+      .icon-button svg {
+        width: 18px;
+        height: 18px;
+      }
+
+      .conversation {
+        flex: 1;
+        padding: 30px clamp(20px, 4vw, 54px) 18px;
+        overflow: auto;
+      }
+      .eyebrow {
+        margin: 0 0 11px;
+        color: #007aff;
+        font-size: 13px;
+        font-weight: 750;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      h1 {
+        max-width: 700px;
+        margin: 0;
+        font-size: clamp(34px, 4.5vw, 50px);
+        line-height: 1.06;
+        letter-spacing: -1.8px;
+      }
+      .intro {
+        max-width: 690px;
+        margin: 15px 0 30px;
+        color: #55555b;
+        font-size: 18px;
+        line-height: 1.55;
+      }
+      .message {
+        display: flex;
+        gap: 12px;
+        max-width: 700px;
+        margin-top: 20px;
+      }
+      .avatar {
+        display: grid;
+        width: 32px;
+        height: 32px;
+        flex: 0 0 auto;
+        place-items: center;
+        color: #187346;
+        border-radius: 11px;
+        background: #e5f8ed;
+        font-size: 15px;
+        font-weight: 800;
+      }
+      .bubble {
+        padding: 16px 17px;
+        border: 1px solid rgba(60, 60, 67, 0.08);
+        border-radius: 18px 18px 18px 5px;
+        background: rgba(255, 255, 255, 0.87);
+        box-shadow: 0 4px 13px rgba(20, 41, 72, 0.045);
+      }
+      .assistant-meta {
+        gap: 7px;
+        margin-bottom: 8px;
+        color: #6c6c70;
+        font-size: 12px;
+      }
+      .assistant-meta strong {
+        color: #242428;
+      }
+      .pulse {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #30d158;
+        box-shadow: 0 0 0 3px rgba(48, 209, 88, 0.14);
+      }
+      .bubble p {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.55;
+      }
+      .sample-card {
+        margin-top: 11px;
+        padding: 12px;
+        border: 1px solid #dfe7f3;
+        border-radius: 12px;
+        background: #f8fbff;
+        color: #3a4658;
+        font:
+          14px/1.65 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+        overflow-wrap: anywhere;
+      }
+      .sample-card span {
+        display: block;
+      }
+      .sample-label {
+        margin-bottom: 6px;
+        color: #7b8797;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .composer-zone {
+        padding: 14px clamp(20px, 4vw, 54px) 28px;
+      }
+      .demo-note {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin: 0 0 10px 4px;
+        color: #6c6c70;
+        font-size: 13px;
+      }
+      .demo-note .lock {
+        color: #187346;
+        font-size: 13px;
+      }
+      .composer {
+        padding: 11px 11px 10px 16px;
+        border: 1px solid rgba(60, 60, 67, 0.16);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.94);
+        box-shadow: 0 7px 18px rgba(37, 69, 108, 0.08);
+        transition:
+          border 0.2s ease,
+          box-shadow 0.2s ease;
+      }
+      .composer:focus-within {
+        border-color: rgba(0, 122, 255, 0.48);
+        box-shadow:
+          0 0 0 4px rgba(0, 122, 255, 0.1),
+          0 7px 18px rgba(37, 69, 108, 0.08);
+      }
+      #message {
+        width: 100%;
+        min-height: 50px;
+        max-height: 130px;
+        outline: none;
+        color: #28282c;
+        font-size: 17px;
+        line-height: 1.5;
+      }
+      #message:empty::before {
+        content: attr(data-placeholder);
+        color: #98989d;
+      }
+      .composer-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding-top: 8px;
+      }
+      .sample-actions {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .sample-actions::-webkit-scrollbar {
+        display: none;
+      }
+      .chip {
+        flex: 0 0 auto;
+        padding: 6px 9px;
+        color: #536174;
+        border: 0;
+        border-radius: 9px;
+        background: #eff3f8;
+        font-size: 12px;
+        font-weight: 650;
+        transition:
+          background 0.16s ease,
+          transform 0.16s ease;
+      }
+      .chip:hover {
+        transform: translateY(-1px);
+        background: #e3ebf6;
+      }
+      .send {
+        display: grid;
+        width: 34px;
+        height: 34px;
+        flex: 0 0 auto;
+        place-items: center;
+        color: #fff;
+        border: 0;
+        border-radius: 11px;
+        background: #007aff;
+        box-shadow: 0 5px 12px rgba(0, 122, 255, 0.24);
+      }
+      .send:hover {
+        background: #0a84ff;
+      }
+      .send svg {
+        width: 17px;
+        height: 17px;
+      }
+
+      aside {
+        padding: 21px 17px;
+        border-left: 1px solid rgba(60, 60, 67, 0.08);
+        background: rgba(248, 250, 255, 0.68);
+      }
+      .side-heading {
+        margin: 4px 5px 12px;
+        color: #6c6c70;
+        font-size: 12px;
+        font-weight: 750;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .privacy-card {
+        padding: 15px;
+        border: 1px solid rgba(60, 60, 67, 0.08);
+        border-radius: 19px;
+        background: rgba(255, 255, 255, 0.82);
+        box-shadow: 0 3px 12px rgba(39, 63, 95, 0.045);
+      }
+      .privacy-icon {
+        width: 43px;
+        height: 43px;
+        filter: drop-shadow(0 3px 7px rgba(0, 122, 255, 0.15));
+      }
+      .privacy-card h2 {
+        margin: 11px 0 5px;
+        font-size: 16px;
+        letter-spacing: -0.2px;
+      }
+      .privacy-card p {
+        margin: 0;
+        color: #6c6c70;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 13px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(60, 60, 67, 0.08);
+        color: #187346;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #30d158;
+      }
+      .steps {
+        display: grid;
+        gap: 9px;
+        margin: 16px 3px;
+      }
+      .step {
+        display: grid;
+        grid-template-columns: 23px 1fr;
+        gap: 9px;
+        align-items: center;
+        color: #55555a;
+        font-size: 13px;
+      }
+      .step-number {
+        display: grid;
+        width: 23px;
+        height: 23px;
+        place-items: center;
+        color: #007aff;
+        border-radius: 8px;
+        background: #e5f1ff;
+        font-size: 12px;
+        font-weight: 750;
+      }
+      .legend {
+        display: grid;
+        gap: 8px;
+        padding: 14px;
+        border-radius: 15px;
+        background: #f0f4f9;
+      }
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #68686d;
+        font-size: 11px;
+      }
+      .swatch {
+        width: 10px;
+        height: 10px;
+        border-radius: 4px;
+      }
+      .swatch.high {
+        background: #ffccd1;
+      }
+      .swatch.medium {
+        background: #ffeba6;
+      }
+      .small-print {
+        margin: 14px 4px 0;
+        color: #98989d;
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
+      @media (max-width: 820px) {
+        .page-shell {
+          padding: 14px;
+        }
+        .stage {
+          min-height: calc(100vh - 28px);
           grid-template-columns: 1fr;
+          border-radius: 24px;
+        }
+        aside {
+          display: none;
+        }
+      }
+      @media (max-width: 500px) {
+        .page-shell {
+          padding: 0;
+        }
+        .stage {
+          min-height: 100vh;
+          border: 0;
+          border-radius: 0;
+        }
+        .topbar {
+          padding: 15px 17px;
+        }
+        .conversation {
+          padding: 28px 17px 14px;
+        }
+        .composer-zone {
+          padding: 13px 17px 20px;
+        }
+        h1 {
+          font-size: 29px;
+        }
+        .brand-subtitle {
+          display: none;
         }
       }
     </style>
   </head>
   <body>
-    <header>
-      <h1>TekaSend test page</h1>
-      <p class="muted">
-        All values here are fictional and invalid. Use this page to test
-        text highlighting and input-field protection.
-      </p>
-    </header>
-    <main>
-      <section class="card">
-        <h2>Visible text</h2>
-        <p>
-          Contact our sample team at <strong>alex@example.com</strong>. The
-          backup contact is <strong>sam@demo.test</strong>.
-        </p>
-        <p>Sample password: <span>password = DemoPass123!</span></p>
-        <p>Sample API key: <span>sk-proj-FAKEEXAMPLEKEY1234567890</span></p>
-        <p>Sample phone: <span>0917 555 0123</span></p>
-        <p>Sample full name: <strong>Olivia Chen</strong>. Sample single name: <strong>Name: Maya</strong>.</p>
-        <p>Synthetic person and address for local AI: <strong>Olivia Chen lives at 123 Oak Street.</strong></p>
-        <pre>Example code token: ghp_1234567890abcdef1234567890abcdef</pre>
-        <p>This ordinary sentence should stay unchanged.</p>
-      </section>
-      <section class="card">
-        <h2>Paste and type</h2>
-        <label for="message">Textarea Field</label
-        ><textarea
-          id="message"
-          placeholder="Paste alex@example.com or password = DemoPass123! here"
-        ></textarea
-        ><label for="email">Input Field</label
-        ><input
-          id="email"
-          type="text"
-          placeholder="Type a sample email"
-        /><label>AI Chatbot Prompt Box (ContentEditable)</label>
-        <div
-          contenteditable="true"
-          style="
-            min-height: 70px;
-            padding: 10px;
-            border: 1px solid #bbc7d8;
-            border-radius: 7px;
-            background: #fff;
-            margin: 5px 0 12px;
-            font: 14px system-ui;
-          "
-          placeholder="Type multi-paragraph prompt here..."
-        >
-          <p>
-            Prompt sample: check sk-proj-1234567890abcdef123456 with email
-            sarah@domain.com
+    <div class="page-shell">
+      <main class="stage" aria-label="TekaSend fictional local demo">
+        <section class="chat" aria-label="Fictional assistant conversation">
+          <header class="topbar">
+            <div class="brand">
+              <img
+                class="brand-mark"
+                src="/tekasend-logo.svg"
+                alt="TekaSend shield and paper-plane logo"
+              />
+              <div>
+                <div class="brand-title">TekaSend Demo</div>
+                <div class="brand-subtitle">
+                  Local privacy protection for AI prompts
+                </div>
+              </div>
+            </div>
+            <div class="top-actions" aria-label="Demo controls">
+              <button
+                class="icon-button"
+                type="button"
+                title="New fictional conversation"
+                aria-label="New fictional conversation"
+              >
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M12 5v14M5 12h14"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </button>
+              <button
+                class="icon-button"
+                type="button"
+                title="Demo settings"
+                aria-label="Demo settings"
+              >
+                <svg viewBox="0 0 24 24" fill="none">
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="3"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                  />
+                  <path
+                    d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.12 2.12-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56v.1h-3v-.1A1.7 1.7 0 0 0 10.68 18.66a1.7 1.7 0 0 0-1.88.34l-.06.06-2.12-2.12.06-.06A1.7 1.7 0 0 0 7.02 15 1.7 1.7 0 0 0 5.46 14h-.1v-3h.1A1.7 1.7 0 0 0 7.02 9.97 1.7 1.7 0 0 0 6.68 8.1l-.06-.06 2.12-2.12.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.56v-.1h3v.1a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.12 2.12-.06.06a1.7 1.7 0 0 0-.34 1.88A1.7 1.7 0 0 0 20.54 11h.1v3h-.1A1.7 1.7 0 0 0 19.4 15Z"
+                    stroke="currentColor"
+                    stroke-width="1.2"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+          </header>
+
+          <div class="conversation">
+            <p class="eyebrow">Fictional local workspace</p>
+            <h1>Share the idea,<br />not the sensitive data.</h1>
+            <p class="intro">
+              This safe demo uses deliberately invalid sample values. TekaSend
+              runs in Chrome and helps surface risky text before it leaves your
+              prompt.
+            </p>
+
+            <article class="message">
+              <div class="avatar" aria-hidden="true">T</div>
+              <div class="bubble">
+                <div class="assistant-meta">
+                  <span class="pulse" aria-hidden="true"></span
+                  ><strong>TekaSend Assistant</strong><span>• local demo</span>
+                </div>
+                <p>
+                  I found a fictional deployment note. Click the highlighted
+                  values to demonstrate a masking effect, or use the prompt
+                  below to trigger the in-field privacy notice.
+                </p>
+                <div class="sample-card" aria-label="Fictional deployment note">
+                  <span class="sample-label"
+                    >Fictional deployment note — not a real credential</span
+                  >
+                  <span>owner: Olivia Chen</span>
+                  <span>contact: olivia.chen@example.test</span>
+                  <span>api_key: sk-proj-1234567890abcdef</span>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div class="composer-zone">
+            <p class="demo-note">
+              <span class="lock" aria-hidden="true">⌁</span> Demo data only —
+              type or paste a sample below to trigger TekaSend.
+            </p>
+            <div class="composer">
+              <div
+                id="message"
+                contenteditable="true"
+                role="textbox"
+                aria-multiline="true"
+                data-placeholder="Ask the fictional assistant anything…"
+              ></div>
+              <div class="composer-footer">
+                <div
+                  class="sample-actions"
+                  aria-label="Insert fictional sample data"
+                >
+                  <button
+                    class="chip"
+                    type="button"
+                    data-sample="Please review my demo contact: alex@example.test"
+                  >
+                    Sample email
+                  </button>
+                  <button
+                    class="chip"
+                    type="button"
+                    data-sample="Use demo key sk-proj-1234567890abcdef in the example."
+                  >
+                    Sample API key
+                  </button>
+                  <button
+                    class="chip"
+                    type="button"
+                    data-sample="The demo phone is 0917-555-0123."
+                  >
+                    Sample phone
+                  </button>
+                </div>
+                <button
+                  class="send"
+                  type="button"
+                  aria-label="Send fictional prompt"
+                  title="This demo button does not send data"
+                >
+                  <svg viewBox="0 0 24 24" fill="none">
+                    <path
+                      d="m5 12 14-7-4.5 14-3.1-5.1L5 12Z"
+                      fill="currentColor"
+                      stroke="currentColor"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside aria-label="TekaSend demo guide">
+          <p class="side-heading">Privacy preview</p>
+          <section class="privacy-card">
+            <img
+              class="privacy-icon"
+              src="/tekasend-logo.svg"
+              alt=""
+            />
+            <h2>Designed to stay local</h2>
+            <p>
+              Use only the fictional values on this page while recording or
+              taking screenshots.
+            </p>
+            <div class="status">
+              <span class="status-dot" aria-hidden="true"></span>Ready for a
+              live demo
+            </div>
+          </section>
+          <div class="steps" aria-label="Demo steps">
+            <div class="step">
+              <span class="step-number">1</span
+              ><span>Click a sample chip.</span>
+            </div>
+            <div class="step">
+              <span class="step-number">2</span
+              ><span>Open TekaSend’s in-field notice.</span>
+            </div>
+            <div class="step">
+              <span class="step-number">3</span
+              ><span>Apply a placeholder or dummy repair.</span>
+            </div>
+          </div>
+          <div class="legend" aria-label="Detection color legend">
+            <div class="legend-item">
+              <span class="swatch high" aria-hidden="true"></span>Credentials
+              and keys
+            </div>
+            <div class="legend-item">
+              <span class="swatch medium" aria-hidden="true"></span>Personal
+              information
+            </div>
+          </div>
+          <p class="small-print">
+            This page is a controlled presentation environment. It contains no
+            real people, credentials, accounts, or messages.
           </p>
-        </div>
-        <label for="password">Password field (ignored)</label
-        ><input
-          id="password"
-          type="password"
-          placeholder="Type a fake password only"
-        />
-      </section>
-      <section class="card">
-        <h2>Dynamic content</h2>
-        <p>
-          This ordinary sentence has no detected confidential information and stays unchanged.
-        </p>
-        <p><button id="add">Add a new sample line</button></p>
-        <div id="dynamic"></div>
-      </section>
-      <section class="card">
-        <h2>Sample image</h2>
-        <p>Images keep their normal webpage behavior.</p>
-        <img alt="Fictional document illustration" src="sample-document.svg" />
-      </section>
-    </main>
+        </aside>
+      </main>
+    </div>
+
     <script>
-      document.querySelector("#add").addEventListener("click", () => {
-        const p = document.createElement("p");
-        p.textContent = "New sample contact: casey@example.com";
-        document.querySelector("#dynamic").append(p);
+      const message = document.querySelector("#message");
+      document.querySelectorAll("[data-sample]").forEach((button) => {
+        button.addEventListener("click", () => {
+          message.textContent = button.dataset.sample;
+          message.focus();
+          message.dispatchEvent(
+            new InputEvent("input", {
+              bubbles: true,
+              inputType: "insertText",
+              data: message.textContent,
+            }),
+          );
+        });
+      });
+
+      document.querySelector(".send").addEventListener("click", () => {
+        message.focus();
       });
     </script>
   </body>

@@ -51,8 +51,6 @@ export class InputIndicatorOverlay {
   private readonly noticeCard: HTMLElement;
   private readonly noticeReasonList: HTMLElement;
 
-  private currentFindings: readonly SensitiveFinding[] = [];
-  private currentProtectedItems: readonly ProtectedItem[] = [];
   private activeElement: HTMLElement | null = null;
   private targetElement: HTMLElement | null = null;
   private isCardVisible = false;
@@ -93,8 +91,6 @@ export class InputIndicatorOverlay {
 
     this.activeElement = element;
     this.targetElement = element;
-    this.currentFindings = findings;
-    this.currentProtectedItems = protectedItems;
     this.renderState(findings, protectedItems);
     this.positionInsideField(bounds);
     this.show();
@@ -104,8 +100,13 @@ export class InputIndicatorOverlay {
    * Hides the in-field indicator and popover notice.
    */
   public hide(): void {
-    this.wrapper.style.display = 'none';
+    this.wrapper.classList.remove('ts-visible');
     this.hideNoticeCard();
+    window.setTimeout(() => {
+      if (!this.activeElement) {
+        this.wrapper.style.display = 'none';
+      }
+    }, 220);
     if (this.activeElement && this.resizeObserver) {
       this.resizeObserver.unobserve(this.activeElement);
     }
@@ -115,6 +116,9 @@ export class InputIndicatorOverlay {
 
   public show(): void {
     this.wrapper.style.display = 'flex';
+    requestAnimationFrame(() => {
+      this.wrapper.classList.add('ts-visible');
+    });
   }
 
   public getIsCardVisible(): boolean {
@@ -141,8 +145,8 @@ export class InputIndicatorOverlay {
   }
 
   /**
-   * Positions the indicator icon at the inside-right edge of the text field, centered vertically.
-   * Responds dynamically whether input is single line or multi-line.
+   * Positions the indicator icon at the inside-right edge of the text field.
+   * For multiline / AI prompt boxes, dynamically places at the ending bottom and avoids collision with send/action buttons and widgets.
    */
   private positionInsideField(bounds: DOMRect): void {
     if (bounds.width === 0 || bounds.height === 0 || bounds.bottom < 0 || bounds.top > window.innerHeight) {
@@ -151,40 +155,120 @@ export class InputIndicatorOverlay {
     }
 
     const iconSize = 24;
+    const isMultiline = bounds.height > 52;
 
-    // Single-line inputs: center vertically. Multiline textareas/prompt boxes: align 8px from top
-    const verticalTop = bounds.height > 52
-      ? bounds.top + 8
-      : bounds.top + Math.max(0, Math.round((bounds.height - iconSize) / 2));
+    let verticalTop: number;
+    let trailingRight = window.innerWidth - bounds.right + 10;
 
-    const trailingRight = window.innerWidth - bounds.right + 8;
+    if (!isMultiline) {
+      // Single-line inputs: vertically centered
+      verticalTop = bounds.top + Math.max(0, Math.round((bounds.height - iconSize) / 2));
+    } else {
+      // Multiline prompt boxes / textareas: place at the ending bottom
+      verticalTop = bounds.bottom - iconSize - 10;
 
-    this.wrapper.style.right = `${Math.max(6, trailingRight)}px`;
+      // Smart collision detection: check for bottom-right action buttons (e.g. Send button, Voice button)
+      if (this.activeElement) {
+        const container = this.activeElement.closest('form, [class*="prompt"], [class*="input"], [class*="chat"], main, body') || this.activeElement.parentElement;
+        if (container) {
+          const buttons = Array.from(container.querySelectorAll<HTMLElement>('button, [role="button"], [class*="send"], [class*="button"], [data-testid*="send"], [aria-label*="Send"], [aria-label*="mic"], [aria-label*="Voice"], [aria-label*="Audio"]'));
+          for (const btn of buttons) {
+            if (btn.offsetParent === null) continue;
+            const btnRect = btn.getBoundingClientRect();
+            // Check if button is in the bottom-right corner of the input area
+            if (
+              btnRect.width > 0 &&
+              btnRect.height > 0 &&
+              btnRect.right <= bounds.right + 20 &&
+              btnRect.left >= bounds.left + bounds.width * 0.4 &&
+              btnRect.bottom <= bounds.bottom + 20 &&
+              btnRect.top >= bounds.bottom - 60
+            ) {
+              const offsetFromRight = window.innerWidth - btnRect.left + 8;
+              if (offsetFromRight > trailingRight) {
+                trailingRight = offsetFromRight;
+                verticalTop = Math.round(btnRect.top + (btnRect.height - iconSize) / 2);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Collision avoidance with third-party extension widgets (e.g. Grammarly)
+    const iconScreenLeft = window.innerWidth - trailingRight - iconSize;
+    const iconScreenRight = iconScreenLeft + iconSize;
+    const iconScreenTop = verticalTop;
+    const iconScreenBottom = verticalTop + iconSize;
+
+    const externalWidgets = Array.from(document.querySelectorAll<HTMLElement>('grammarly-extension, [data-grammarly-part], [class*="grammarly"], [class*="languagetool"]'));
+    for (const widget of externalWidgets) {
+      const wRect = widget.getBoundingClientRect();
+      if (wRect.width > 0 && wRect.height > 0) {
+        const overlaps = !(
+          iconScreenRight < wRect.left ||
+          iconScreenLeft > wRect.right ||
+          iconScreenBottom < wRect.top ||
+          iconScreenTop > wRect.bottom
+        );
+        if (overlaps) {
+          trailingRight = Math.max(trailingRight, window.innerWidth - wRect.left + 8);
+        }
+      }
+    }
+
+    // Clamp within viewport
+    trailingRight = Math.max(6, Math.min(trailingRight, window.innerWidth - iconSize - 6));
+    verticalTop = Math.max(6, Math.min(verticalTop, window.innerHeight - iconSize - 6));
+
+    this.wrapper.style.right = `${trailingRight}px`;
     this.wrapper.style.top = `${verticalTop}px`;
 
-    // Keep the popover within the viewport when the field is narrow or left-aligned.
-    const cardWidth = Math.min(320, window.innerWidth - 20);
-    const wrapperRight = Math.max(6, trailingRight);
-    const wrapperRightEdge = window.innerWidth - wrapperRight;
-    const cardLeft = Math.max(10, Math.min(wrapperRightEdge - cardWidth, window.innerWidth - cardWidth - 10));
-    this.noticeCard.style.right = `${wrapperRightEdge - cardLeft - cardWidth}px`;
+    // Responsive Card Sizing & Placement
+    const viewportWidth = window.innerWidth;
+    const isMobile = viewportWidth <= 480;
+    const cardWidth = isMobile
+      ? Math.min(340, viewportWidth - 16)
+      : Math.min(320, viewportWidth - 20);
 
-    this.updateCardPlacement(bounds);
+    this.noticeCard.style.width = `${cardWidth}px`;
+
+    const wrapperRightEdge = viewportWidth - trailingRight;
+    const desiredCardLeft = Math.max(8, Math.min(wrapperRightEdge - cardWidth + 12, viewportWidth - cardWidth - 8));
+    const cardOffsetRight = wrapperRightEdge - (desiredCardLeft + cardWidth);
+    this.noticeCard.style.right = `${cardOffsetRight}px`;
+
+    this.updateCardPlacement(bounds, verticalTop);
   }
 
   /**
-   * Automatically positions the card above or below the field without cut-offs.
+   * Automatically positions the card above or below the field without cut-offs,
+   * dynamically calculating max-height based on available viewport space.
    */
-  private updateCardPlacement(bounds: DOMRect): void {
-    const spaceAbove = bounds.top;
-    const spaceBelow = window.innerHeight - bounds.bottom;
+  private updateCardPlacement(bounds: DOMRect, customVerticalTop?: number): void {
+    const iconSize = 24;
+    const isMultiline = bounds.height > 52;
+    const verticalTop = customVerticalTop ?? (isMultiline
+      ? bounds.bottom - iconSize - 10
+      : bounds.top + Math.max(0, Math.round((bounds.height - iconSize) / 2)));
 
-    if (spaceAbove < 240 && spaceBelow >= 180) {
-      this.noticeCard.classList.remove('place-above');
-      this.noticeCard.classList.add('place-below');
-    } else {
+    const viewportHeight = window.innerHeight;
+    const spaceAbove = Math.max(0, verticalTop - 16);
+    const spaceBelow = Math.max(0, viewportHeight - (bounds.bottom + 8));
+
+    // Choose placement: prefer above if enough space, otherwise place below
+    const placeAbove = spaceAbove >= 280 || (spaceAbove >= spaceBelow && spaceAbove >= 160);
+
+    if (placeAbove) {
       this.noticeCard.classList.remove('place-below');
       this.noticeCard.classList.add('place-above');
+      const maxH = Math.max(140, Math.min(420, spaceAbove));
+      this.noticeCard.style.maxHeight = `${maxH}px`;
+    } else {
+      this.noticeCard.classList.remove('place-above');
+      this.noticeCard.classList.add('place-below');
+      const maxH = Math.max(140, Math.min(420, spaceBelow));
+      this.noticeCard.style.maxHeight = `${maxH}px`;
     }
   }
 
@@ -239,7 +323,7 @@ export class InputIndicatorOverlay {
       const highCount = findings.filter(f => f.severity === 'high').length;
       const mediumCount = findings.filter(f => f.severity === 'medium').length;
 
-      // Summary Header
+      // Summary Header & Educational Info Section (PRD F1 Data Awareness Notice)
       const headerRow = document.createElement('div');
       headerRow.className = 'ts-threats-summary-header';
       headerRow.innerHTML = `
@@ -251,6 +335,14 @@ export class InputIndicatorOverlay {
             ${mediumCount > 0 ? `<span class="ts-chip medium">${mediumCount} Medium</span>` : ''}
           </div>
         </div>
+        <div class="ts-guidance-box">
+          <div class="ts-guidance-title">Why mask sensitive data?</div>
+          <div class="ts-guidance-desc">Protects personal info and secrets from AI model training and external leakage.</div>
+          <div class="ts-guidance-strategies">
+            <div class="ts-strat-row"><b>Placeholder:</b> Replaces with safe token (e.g. <code>[API_KEY]</code>, <code>[EMAIL_ADDRESS]</code>)</div>
+            <div class="ts-strat-row"><b>Scramble:</b> Replaces with realistic synthetic dummy text</div>
+          </div>
+        </div>
       `;
       this.noticeReasonList.append(headerRow);
 
@@ -259,10 +351,10 @@ export class InputIndicatorOverlay {
         const bulkActionRow = document.createElement('div');
         bulkActionRow.className = 'ts-bulk-actions-bar';
         bulkActionRow.innerHTML = `
-          <button type="button" class="ts-bulk-btn primary" id="tsBulkPlaceholders">
+          <button type="button" class="ts-bulk-btn primary" id="tsBulkPlaceholders" title="Replace all detected secrets with safe [CATEGORY] placeholder tokens">
             Replace All (Alt+P)
           </button>
-          <button type="button" class="ts-bulk-btn secondary" id="tsBulkScramble">
+          <button type="button" class="ts-bulk-btn secondary" id="tsBulkScramble" title="Replace all detected secrets with realistic synthetic dummy text">
             Scramble All (Alt+S)
           </button>
         `;
@@ -322,9 +414,10 @@ export class InputIndicatorOverlay {
             <span class="ts-severity-badge ${finding.severity}">${finding.severity.toUpperCase()}</span>
           </div>
           <div class="ts-item-reason">${risk.explanation}</div>
+          <div class="ts-item-recommendation"><b>Action:</b> ${risk.recommendedAction}</div>
           <div class="ts-item-actions">
-            <button type="button" class="ts-repair-btn primary" data-strategy="semantic_placeholder">Placeholder</button>
-            <button type="button" class="ts-repair-btn" data-strategy="synthetic_dummy">Scramble</button>
+            <button type="button" class="ts-repair-btn primary" data-strategy="semantic_placeholder" title="Replace with safe [${finding.category.toUpperCase()}] token">Placeholder</button>
+            <button type="button" class="ts-repair-btn secondary" data-strategy="synthetic_dummy" title="Replace with realistic synthetic dummy text">Scramble</button>
           </div>
         `;
 
@@ -509,17 +602,20 @@ export class InputIndicatorOverlay {
       }
     });
 
-    window.addEventListener('scroll', () => {
-      if (this.activeElement) {
+    const repositionHandler = () => {
+      if (this.activeElement && this.activeElement.isConnected) {
         this.positionInsideField(this.activeElement.getBoundingClientRect());
       }
-    }, { passive: true });
+    };
 
-    window.addEventListener('resize', () => {
-      if (this.activeElement) {
-        this.positionInsideField(this.activeElement.getBoundingClientRect());
-      }
-    }, { passive: true });
+    window.addEventListener('scroll', repositionHandler, { passive: true });
+    window.addEventListener('resize', repositionHandler, { passive: true });
+    document.addEventListener('scroll', repositionHandler, { capture: true, passive: true });
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', repositionHandler, { passive: true });
+      window.visualViewport.addEventListener('scroll', repositionHandler, { passive: true });
+    }
   }
 
   private buildDomElements() {
@@ -580,11 +676,22 @@ export class InputIndicatorOverlay {
         box-sizing: border-box !important;
         align-items: center;
         justify-content: center;
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif;
+        font-family: var(--ts-font, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif);
         font-size: 12px;
         line-height: 1.4;
         pointer-events: auto !important;
         overflow: visible;
+        opacity: 0;
+        transform: scale(0.85);
+        transition: top 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+                    right 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+                    opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+                    transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      .ts-infield-guardian-wrapper.ts-visible {
+        opacity: 1;
+        transform: scale(1);
       }
 
       /* ── Minimalist Dynamic iOS In-Field Icon ── */
@@ -608,9 +715,12 @@ export class InputIndicatorOverlay {
         padding: 0;
         margin: 0;
         outline: none;
-        box-shadow: none !important;
+        box-shadow: var(--ts-shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.10)) !important;
         animation: none !important;
-        transition: opacity 0.15s ease, transform 0.15s ease;
+        transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
+                    background-color 0.2s ease,
+                    box-shadow 0.2s ease,
+                    opacity 0.15s ease !important;
       }
 
       .ts-infield-icon-btn svg {
@@ -620,50 +730,53 @@ export class InputIndicatorOverlay {
       }
 
       .ts-infield-icon-btn:hover {
-        opacity: 0.88;
-        transform: scale(1.08);
+        opacity: 1;
+        transform: scale(1.12);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16) !important;
       }
 
       .ts-infield-icon-btn:active {
-        transform: scale(0.94);
-        opacity: 0.75;
+        transform: scale(0.92);
+        opacity: 0.85;
       }
 
       /* Safe State — Clean Minimalist iOS Green */
       .ts-infield-icon-btn.state-safe {
-        background: rgba(52, 199, 89, 0.14);
-        color: #34c759;
+        background: var(--ts-green-bg, rgba(52, 199, 89, 0.12));
+        color: var(--ts-green, #34c759);
+        border: 1px solid var(--ts-green-bd, rgba(52, 199, 89, 0.24));
       }
 
       /* Warning State — Flat Solid iOS Amber */
       .ts-infield-icon-btn.state-warning {
-        background: #ff9500;
+        background: var(--ts-orange, #ff9500);
         color: #ffffff;
       }
 
       /* Critical State — Flat Solid iOS Red */
       .ts-infield-icon-btn.state-critical {
-        background: #ff3b30;
+        background: var(--ts-red, #ff3b30);
         color: #ffffff;
       }
 
       /* ── Compact iOS Popover Card ─────────────────────── */
       .ts-data-awareness-card {
         position: absolute;
-        right: 0;
         width: 320px;
+        max-width: calc(100vw - 16px);
         max-height: 380px;
-        background: rgba(255, 255, 255, 0.98);
-        border: 1px solid rgba(60, 60, 67, 0.14);
-        border-radius: 14px;
-        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
+        background: var(--ts-card, #ffffff);
+        border: 1px solid var(--ts-border, rgba(60, 60, 67, 0.10));
+        border-radius: 16px;
+        box-shadow: var(--ts-shadow, 0 10px 30px rgba(0, 0, 0, 0.12));
         backdrop-filter: blur(24px);
         -webkit-backdrop-filter: blur(24px);
-        padding: 11px 13px;
+        padding: 12px 14px;
         display: none;
         flex-direction: column;
-        gap: 8px;
-        color: #1c1c1e;
+        gap: 9px;
+        color: var(--ts-text, #1c1c1e);
+        font-family: var(--ts-font, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif);
         z-index: 2147483647;
         pointer-events: auto !important;
         box-sizing: border-box;
@@ -688,8 +801,9 @@ export class InputIndicatorOverlay {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding-bottom: 5px;
-        border-bottom: 1px solid rgba(60, 60, 67, 0.08);
+        padding-bottom: 7px;
+        border-bottom: 1px solid var(--ts-border, rgba(60, 60, 67, 0.10));
+        flex-shrink: 0;
       }
 
       .ts-card-brand {
@@ -700,44 +814,49 @@ export class InputIndicatorOverlay {
 
       .ts-brand-logo {
         font-weight: 700;
-        font-size: 12.5px;
-        color: #1c1c1e;
+        font-size: 13px;
+        color: var(--ts-text, #1c1c1e);
         letter-spacing: -0.2px;
       }
 
       .ts-local-ai-tag {
-        font-size: 9.5px;
+        font-size: 10px;
         font-weight: 600;
-        padding: 1px 6px;
+        padding: 1.5px 7px;
         border-radius: 9999px;
-        background: rgba(52, 199, 89, 0.12);
-        color: #248a3d;
+        background: var(--ts-green-bg, rgba(52, 199, 89, 0.12));
+        color: var(--ts-green-text, #1a7a2b);
       }
 
       .ts-dismiss-btn {
         background: transparent;
         border: none;
-        font-size: 11px;
-        color: #8e8e93;
+        font-size: 12px;
+        color: var(--ts-secondary, #6c6c70);
         cursor: pointer;
-        padding: 0 2px;
+        padding: 2px 4px;
         line-height: 1;
+        border-radius: 4px;
+        transition: color 0.15s ease;
       }
 
       .ts-dismiss-btn:hover {
-        color: #1c1c1e;
+        color: var(--ts-text, #1c1c1e);
       }
 
       .ts-card-reasons-list {
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 8px;
+        flex: 1 1 auto;
+        min-height: 0;
         overflow: hidden;
       }
 
       /* ── Threats Summary Header & Chips ── */
       .ts-threats-summary-header {
-        padding: 1px 0 2px;
+        padding: 0;
+        flex-shrink: 0;
       }
 
       .ts-summary-title-row {
@@ -748,87 +867,147 @@ export class InputIndicatorOverlay {
 
       .ts-summary-title {
         font-weight: 700;
-        font-size: 11.5px;
-        color: #1c1c1e;
+        font-size: 12px;
+        color: var(--ts-text, #1c1c1e);
       }
 
       .ts-summary-chips {
         display: flex;
-        gap: 4px;
+        gap: 5px;
       }
 
       .ts-chip {
-        font-size: 8.5px;
-        font-weight: 700;
-        padding: 1px 5px;
+        font-size: 9px;
+        font-weight: 600;
+        padding: 2px 7px;
         border-radius: 9999px;
-        letter-spacing: 0.2px;
+        letter-spacing: 0.1px;
       }
 
       .ts-chip.critical {
-        background: rgba(255, 59, 48, 0.14);
-        color: #d70015;
+        background: var(--ts-red-bg, rgba(255, 59, 48, 0.12));
+        color: var(--ts-red-text, #d70015);
       }
 
       .ts-chip.high {
-        background: rgba(255, 149, 0, 0.14);
-        color: #c93400;
+        background: var(--ts-orange-bg, rgba(255, 149, 0, 0.12));
+        color: var(--ts-orange-text, #c93400);
       }
 
       .ts-chip.medium {
-        background: rgba(255, 204, 0, 0.18);
-        color: #8a6d00;
+        background: var(--ts-yellow-bg, rgba(255, 204, 0, 0.16));
+        color: var(--ts-yellow-text, #8a6d00);
+      }
+
+      /* ── Guidance / Educational Box (PRD F1 Data Awareness) ── */
+      .ts-guidance-box {
+        background: var(--ts-blue-subtle, rgba(0, 122, 255, 0.08));
+        border: 1px solid var(--ts-blue-border, rgba(0, 122, 255, 0.20));
+        border-radius: 11px;
+        padding: 8px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-top: 5px;
+      }
+
+      .ts-guidance-title {
+        font-weight: 650;
+        font-size: 11px;
+        color: var(--ts-blue, #007aff);
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .ts-guidance-desc {
+        font-size: 10px;
+        color: var(--ts-secondary, #6c6c70);
+        line-height: 1.35;
+      }
+
+      .ts-guidance-strategies {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        margin-top: 2px;
+      }
+
+      .ts-strat-row {
+        display: block;
+        font-size: 9.5px;
+        line-height: 1.4;
+        color: var(--ts-secondary, #6c6c70);
+      }
+
+      .ts-strat-row b {
+        font-weight: 600;
+        color: var(--ts-text, #1c1c1e);
+      }
+
+      .ts-strat-row code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 9px;
+        background: var(--ts-control, rgba(120, 120, 128, 0.12));
+        color: var(--ts-text, #1c1c1e);
+        border: 1px solid var(--ts-border, rgba(60, 60, 67, 0.10));
+        padding: 1px 4px;
+        border-radius: 4px;
       }
 
       /* ── Global One-Click Bulk Actions Bar ── */
       .ts-bulk-actions-bar {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 5px;
+        gap: 6px;
         margin-bottom: 2px;
+        flex-shrink: 0;
       }
 
       .ts-bulk-btn {
-        padding: 5px 6px;
-        font-size: 10px;
+        padding: 6px 8px;
+        font-size: 10.5px;
         font-weight: 600;
-        border-radius: 6px;
+        border-radius: 8px;
+        font-family: inherit;
         cursor: pointer;
         text-align: center;
-        transition: opacity 0.12s ease;
+        transition: background 0.15s ease, transform 0.15s ease;
       }
 
       .ts-bulk-btn.primary {
-        background: #5856d6;
+        background: var(--ts-blue, #007aff);
         color: #ffffff;
         border: none;
       }
 
       .ts-bulk-btn.primary:hover {
-        opacity: 0.92;
+        background: var(--ts-blue-hover, #0a84ff);
       }
 
       .ts-bulk-btn.secondary {
-        background: #f2f2f7;
-        color: #1c1c1e;
-        border: 1px solid rgba(60, 60, 67, 0.14);
+        background: var(--ts-card, #ffffff);
+        color: var(--ts-text, #1c1c1e);
+        border: 1px solid var(--ts-border-mid, rgba(60, 60, 67, 0.16));
       }
 
       .ts-bulk-btn.secondary:hover {
-        background: #e5e5ea;
+        background: var(--ts-control, rgba(120, 120, 128, 0.12));
       }
 
       /* ── Max-Height Scrollable Feed ── */
       .ts-scrollable-items-feed {
         display: flex;
         flex-direction: column;
-        gap: 5px;
-        max-height: 220px;
+        gap: 6px;
+        flex: 1 1 auto;
+        min-height: 0;
         overflow-y: auto;
         overflow-x: hidden;
         padding-right: 2px;
         scrollbar-width: thin;
-        scrollbar-color: rgba(60, 60, 67, 0.25) transparent;
+        scrollbar-color: var(--ts-border-mid, rgba(60, 60, 67, 0.20)) transparent;
+        overscroll-behavior: contain;
       }
 
       .ts-scrollable-items-feed::-webkit-scrollbar {
@@ -840,23 +1019,23 @@ export class InputIndicatorOverlay {
       }
 
       .ts-scrollable-items-feed::-webkit-scrollbar-thumb {
-        background: rgba(60, 60, 67, 0.22);
+        background: var(--ts-border-mid, rgba(60, 60, 67, 0.20));
         border-radius: 9999px;
       }
 
       .ts-scrollable-items-feed::-webkit-scrollbar-thumb:hover {
-        background: rgba(60, 60, 67, 0.40);
+        background: var(--ts-secondary, rgba(60, 60, 67, 0.40));
       }
 
       /* ── Compact Individual Threat Item ── */
       .ts-notice-item {
-        background: rgba(120, 120, 128, 0.05);
-        border: 1px solid rgba(60, 60, 67, 0.08);
-        border-radius: 8px;
-        padding: 6px 8px;
+        background: var(--ts-subtle, #f2f2f7);
+        border: 1px solid var(--ts-border, rgba(60, 60, 67, 0.10));
+        border-radius: 11px;
+        padding: 8px 10px;
         display: flex;
         flex-direction: column;
-        gap: 3px;
+        gap: 5px;
       }
 
       .ts-item-header {
@@ -868,51 +1047,53 @@ export class InputIndicatorOverlay {
       .ts-item-tag-group {
         display: flex;
         align-items: center;
-        gap: 5px;
+        gap: 6px;
         overflow: hidden;
       }
 
       .ts-category-tag {
-        font-weight: 600;
-        font-size: 10.5px;
+        font-weight: 650;
+        font-size: 11px;
+        color: var(--ts-text, #1c1c1e);
         white-space: nowrap;
       }
 
       .ts-category-tag.safe {
-        color: #248a3d;
+        color: var(--ts-green-text, #1a7a2b);
       }
 
       .ts-severity-badge {
-        font-size: 8px;
+        font-size: 8.5px;
         font-weight: 700;
-        padding: 1px 4px;
-        border-radius: 3px;
+        padding: 2px 6px;
+        border-radius: 9999px;
         letter-spacing: 0.2px;
         flex-shrink: 0;
       }
 
       .ts-severity-badge.critical {
-        background: rgba(255, 59, 48, 0.14);
-        color: #d70015;
+        background: var(--ts-red-bg, rgba(255, 59, 48, 0.12));
+        color: var(--ts-red-text, #d70015);
       }
 
       .ts-severity-badge.high {
-        background: rgba(255, 149, 0, 0.14);
-        color: #c93400;
+        background: var(--ts-orange-bg, rgba(255, 149, 0, 0.12));
+        color: var(--ts-orange-text, #c93400);
       }
 
       .ts-severity-badge.medium {
-        background: rgba(255, 204, 0, 0.18);
-        color: #8a6d00;
+        background: var(--ts-yellow-bg, rgba(255, 204, 0, 0.16));
+        color: var(--ts-yellow-text, #8a6d00);
       }
 
       .ts-code-preview {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         font-size: 10px;
-        background: rgba(0, 0, 0, 0.05);
-        padding: 1px 4px;
-        border-radius: 3px;
-        color: #c41e3a;
+        background: var(--ts-control, rgba(120, 120, 128, 0.12));
+        border: 1px solid var(--ts-border, rgba(60, 60, 67, 0.10));
+        padding: 1px 5px;
+        border-radius: 4px;
+        color: var(--ts-text, #1c1c1e);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -922,58 +1103,72 @@ export class InputIndicatorOverlay {
       .ts-count-pill {
         font-size: 8.5px;
         font-weight: 700;
-        background: rgba(0, 122, 255, 0.12);
-        color: #007aff;
-        padding: 1px 4px;
+        background: var(--ts-blue-subtle, rgba(0, 122, 255, 0.12));
+        color: var(--ts-blue, #007aff);
+        padding: 1px 5px;
         border-radius: 4px;
       }
 
       .ts-item-reason {
+        font-size: 10.5px;
+        color: var(--ts-secondary, #6c6c70);
+        line-height: 1.35;
+      }
+
+      .ts-item-recommendation {
         font-size: 10px;
-        color: #636366;
-        line-height: 1.25;
+        color: var(--ts-green-text, #1a7a2b);
+        background: var(--ts-green-bg, rgba(52, 199, 89, 0.12));
+        border: 1px solid var(--ts-green-bd, rgba(52, 199, 89, 0.24));
+        border-radius: 7px;
+        padding: 5px 8px;
+        line-height: 1.35;
+      }
+
+      .ts-item-recommendation b {
+        font-weight: 600;
       }
 
       .ts-item-actions {
-        display: flex;
-        gap: 4px;
-        margin-top: 1px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        margin-top: 2px;
       }
 
       .ts-repair-btn {
-        flex: 1;
-        background: #ffffff;
-        border: 1px solid rgba(60, 60, 67, 0.16);
-        border-radius: 5px;
-        padding: 4px 6px;
-        font-size: 10px;
-        font-weight: 500;
-        color: #1c1c1e;
+        background: var(--ts-card, #ffffff);
+        border: 1px solid var(--ts-border-mid, rgba(60, 60, 67, 0.16));
+        border-radius: 7px;
+        padding: 6px 8px;
+        font-size: 10.5px;
+        font-weight: 550;
+        color: var(--ts-text, #1c1c1e);
+        font-family: inherit;
         cursor: pointer;
         text-align: center;
-        transition: background 0.12s ease;
+        transition: background 0.15s ease, transform 0.15s ease;
       }
 
       .ts-repair-btn.primary {
-        background: #5856d6;
+        background: var(--ts-blue, #007aff);
         color: #ffffff;
         border: none;
         font-weight: 600;
       }
 
       .ts-repair-btn.primary:hover {
-        opacity: 0.92;
+        background: var(--ts-blue-hover, #0a84ff);
       }
 
       .ts-repair-btn:hover:not(.primary) {
-        background: #f2f2f7;
-        color: #5856d6;
-        border-color: #5856d6;
+        background: var(--ts-control, rgba(120, 120, 128, 0.12));
       }
 
       /* ── Protected Items Manager View ── */
       .ts-protected-status-header {
-        padding: 1px 0 2px;
+        padding: 0;
+        flex-shrink: 0;
       }
 
       .ts-status-indicator {
@@ -983,50 +1178,51 @@ export class InputIndicatorOverlay {
       }
 
       .ts-status-dot {
-        width: 7px;
-        height: 7px;
+        width: 8px;
+        height: 8px;
         border-radius: 50%;
-        background: #34c759;
+        background: var(--ts-green, #34c759);
       }
 
       .ts-status-title {
         font-weight: 700;
-        font-size: 11.5px;
-        color: #1c1c1e;
+        font-size: 12px;
+        color: var(--ts-text, #1c1c1e);
       }
 
       .ts-protected-item-card {
-        background: rgba(52, 199, 89, 0.06);
-        border: 1px solid rgba(52, 199, 89, 0.20);
-        border-radius: 7px;
-        padding: 6px 7px;
+        background: var(--ts-subtle, #f2f2f7);
+        border: 1px solid var(--ts-border, rgba(60, 60, 67, 0.10));
+        border-radius: 10px;
+        padding: 8px 10px;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 6px;
+        gap: 8px;
       }
 
       .ts-protected-left {
         display: flex;
         flex-direction: column;
-        gap: 1px;
+        gap: 2px;
         overflow: hidden;
       }
 
       .ts-mode-tag {
-        font-size: 8.5px;
+        font-size: 9px;
         font-weight: 600;
-        background: rgba(60, 60, 67, 0.08);
-        padding: 1px 4px;
-        border-radius: 3px;
-        color: #3a3a3c;
+        background: var(--ts-control, rgba(120, 120, 128, 0.12));
+        border: 1px solid var(--ts-border, rgba(60, 60, 67, 0.10));
+        padding: 2px 5px;
+        border-radius: 4px;
+        color: var(--ts-secondary, #6c6c70);
         align-self: flex-start;
       }
 
       .ts-protected-token {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        font-size: 10px;
-        color: #198754;
+        font-size: 10.5px;
+        color: var(--ts-green-text, #1a7a2b);
         font-weight: 600;
         white-space: nowrap;
         overflow: hidden;
@@ -1041,43 +1237,43 @@ export class InputIndicatorOverlay {
       }
 
       .ts-switch-btn {
-        background: #5856d6;
+        background: var(--ts-blue, #007aff);
         color: #ffffff;
         border: none;
-        border-radius: 6px;
-        padding: 4px 8px;
-        font-size: 10px;
+        border-radius: 7px;
+        padding: 5px 9px;
+        font-size: 10.5px;
         font-weight: 600;
+        font-family: inherit;
         cursor: pointer;
-        transition: all 0.14s ease;
+        transition: background 0.15s ease, transform 0.15s ease;
       }
 
       .ts-switch-btn:hover {
-        opacity: 0.90;
-        transform: translateY(-0.5px);
+        background: var(--ts-blue-hover, #0a84ff);
       }
 
       /* Clean State Box */
       .ts-clean-status-box {
         display: flex;
         align-items: center;
-        gap: 8px;
-        background: rgba(52, 199, 89, 0.08);
-        border: 1px solid rgba(52, 199, 89, 0.18);
-        border-radius: 8px;
-        padding: 10px 10px;
+        gap: 10px;
+        background: var(--ts-green-bg, rgba(52, 199, 89, 0.12));
+        border: 1px solid var(--ts-green-bd, rgba(52, 199, 89, 0.24));
+        border-radius: 11px;
+        padding: 11px 12px;
       }
 
       .ts-clean-icon {
-        width: 20px;
-        height: 20px;
+        width: 22px;
+        height: 22px;
         border-radius: 50%;
-        background: #34c759;
+        background: var(--ts-green, #34c759);
         color: #ffffff;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 700;
         flex-shrink: 0;
       }
@@ -1089,13 +1285,36 @@ export class InputIndicatorOverlay {
       }
 
       .ts-clean-text strong {
-        font-size: 11.5px;
-        color: #1c1c1e;
+        font-size: 12px;
+        color: var(--ts-text, #1c1c1e);
       }
 
       .ts-clean-text span {
-        font-size: 10px;
-        color: #636366;
+        font-size: 10.5px;
+        color: var(--ts-secondary, #6c6c70);
+      }
+
+      @media (max-width: 480px) {
+        .ts-data-awareness-card {
+          width: calc(100vw - 16px) !important;
+          max-width: 340px !important;
+          padding: 10px 12px;
+          border-radius: 14px;
+          gap: 6px;
+        }
+        .ts-bulk-actions-bar {
+          gap: 5px;
+        }
+        .ts-bulk-btn {
+          padding: 7px 6px;
+          font-size: 10.5px;
+        }
+        .ts-notice-item {
+          padding: 7px 8px;
+        }
+        .ts-code-preview {
+          max-width: 95px;
+        }
       }
     `;
     this.shadow.append(style);

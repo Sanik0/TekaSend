@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">TekaSend logo</title>
+  <desc id="desc">A blue shield surrounding a paper plane</desc>
+  <defs>
+    <linearGradient id="blue" x1="94" y1="73" x2="411" y2="437" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#51A3FF"/>
+      <stop offset=".48" stop-color="#1479F2"/>
+      <stop offset="1" stop-color="#0755CB"/>
+    </linearGradient>
+    <linearGradient id="plane" x1="140" y1="158" x2="377" y2="357" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DFF1FF"/>
+      <stop offset="1" stop-color="#87C7FF"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="#FFF"/>
+  <path d="M256 58c69 39 113 47 166 48 9 0 17 7 18 17 10 139-24 256-184 334-160-78-194-195-184-334 1-10 9-17 18-17 53-1 97-9 166-48Z" fill="#FFF" stroke="url(#blue)" stroke-width="24" stroke-linejoin="round"/>
+  <path d="M130 270 367 168c13-6 25 8 17 20L276 354c-5 8-17 8-23 1l-39-54-70-17c-16-4-19-8-14-14Z" fill="url(#plane)" stroke="url(#blue)" stroke-width="22" stroke-linejoin="round"/>
+  <path d="m214 301 62-52" fill="none" stroke="url(#blue)" stroke-width="19" stroke-linecap="round"/>
+  <path d="m214 301 11 63 28-31" fill="none" stroke="url(#blue)" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -10,6 +10,7 @@
  */
 
 import {
+  FindingCategory,
   RepairDirective,
   RepairResult,
   RepairStrategyType,
@@ -193,7 +194,7 @@ export class PrivacyReplacer {
         const dummyFinding: SensitiveFinding = {
           id: entity.id || 'existing_entity',
           label: entity.label || entity.category,
-          category: entity.category as any,
+          category: entity.category as FindingCategory,
           rawText: raw,
           start: 0,
           end: raw.length,

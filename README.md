@@ -1,45 +1,167 @@
-# TekaSend
+#   
 
-A Chrome Manifest V3 extension that highlights likely sensitive text, offers visual masking actions, and warns when sensitive text is pasted or typed into fields.
+> **"Teka muna. Check bago send."** *(Hold on. Check before sending.)*  
+> **AppBuildersPH Hackathon 2026 — Local AI Track Submission**  
+> *A 100% on-device, zero-trust privacy guardian that intercepts confidential secrets, credentials, and personal data before they leak into cloud AI chatbots and web applications.*
 
-## Run locally
+---
 
-Install Node.js 20 or newer and a current desktop Chrome. In **Windows PowerShell**, run these commands from the project folder:
+## 📋 Hackathon Submission Overview
 
-```powershell
-npm.cmd install
-npm.cmd run model:download
-npm.cmd run build
+| Field | Details |
+|---|---|
+| **Project Name** | **TekaSend** *(From Filipino "Teka muna" [Hold on / Wait a second] + "Send")* |
+| **Tagline** | *Teka muna. Check bago send.* |
+| **Track** | Local AI (Privacy-Preserving Edge AI) |
+| **Team Structure** | Team |
+| **GitHub Repository** | [https://github.com/Sanik0/TekaSend](https://github.com/Sanik0/TekaSend) |
+| **Core AI Execution** | 100% On-Device Local Inference (Zero Cloud AI API dependency) |
+
+---
+
+## 💡 Problem Statement
+
+As AI chatbots and developer web tools (ChatGPT, Claude, Gemini, DeepSeek, Cursor, GitHub) become daily workflows, users constantly copy-paste code snippets, configs, logs, and messages containing:
+- **API Keys & Credentials:** OpenAI (`sk-proj-`), GitHub (`ghp_`), AWS (`AKIA`), database connection strings, passwords.
+- **Personally Identifiable Information (PII):** Full names, corporate emails, Philippine contact numbers (`0917...`), physical addresses, SSN/IDs, and financial cards.
+
+### The Cloud Privacy Paradox:
+When users rely on cloud-based privacy scanners, **they are forced to send their most sensitive plaintext secrets to another cloud server**, introducing secondary data breaches, compliance violations (GDPR/DPA), network latency, and recurring API costs.
+
+---
+
+## 🛡️ Brief Description & Solution
+
+Inspired by the everyday Filipino expression *"Teka muna"* (wait a minute / hold on), **TekaSend** puts the *"Teka muna. Check bago send"* mindset into practice as an intelligent pre-flight privacy guard. 
+
+It is an ultra-fast, zero-trust Chrome extension (Manifest V3) that provides **real-time data sanitization** directly inside input fields, textareas, and prompt boxes:
+
+1. **Instant In-Field Highlight & Indicator:** Detects sensitive data with sub-millisecond deterministic rules and neural contextual classification.
+2. **Data Awareness Notice (Why mask?):** Contextually educates users on the specific risk and impact of each detected entity.
+3. **Smart 1-Click Privacy Repairs:**
+   - **Semantic Placeholders:** Replaces secrets with format-safe tokens (e.g., `[API_KEY]`, `[EMAIL_ADDRESS]`, `[PASSWORD]`). Distinct entities receive sequential identifiers (`[EMAIL_ADDRESS_1]`, `[EMAIL_ADDRESS_2]`) while repeated mentions preserve referential integrity.
+   - **Synthetic Dummy Scrambling:** Replaces values with realistic dummy text matching the exact format and structure.
+4. **Passive Webpage Masking:** Protects on-screen text with interactive Blurs, Placeholders, or animated Canvas particle Spoilers.
+5. **Two-Way Protection Manager & Undo:** Seamlessly switch between Placeholder and Scramble strategies, restore originals, or undo with `Ctrl+Z` / `Alt+P` / `Alt+S`.
+
+---
+
+## ⚡ Why Does This Product Benefit From Running AI Locally?
+
+1. **Zero-Trust Privacy Guarantee:** Your secrets and confidential documents **never leave your device**. No cloud server or third-party ever receives or logs your plaintext input.
+2. **Zero Network Latency (<1ms deterministic scan, fast neural inference):** Instant feedback as you type without waiting for external API round-trips.
+3. **Complete Offline Resilience:** Functions seamlessly in air-gapped environments, on airplanes, or during internet disruptions.
+4. **Zero Cloud Infrastructure & Token Costs:** Completely free to run with zero recurring API billing or compute quotas.
+
+---
+
+## 🛠️ Tools & Technologies
+
+- **Architecture:** Chrome Manifest V3 Extension (Content Scripts, Background Service Worker, Offscreen Document, Shadow DOM).
+- **Core Languages & Frameworks:** TypeScript, Vanilla CSS (Design Tokens), HTML5.
+- **Runtime & Inference:** [ONNX Runtime Web](https://onnxruntime.ai/) (`ort-wasm-simd-threaded.wasm`) running in an isolated Chrome Offscreen Worker.
+- **Build System:** `esbuild`, Node.js 20+, native Web APIs.
+- **Testing:** Node.js native test runner (`node --test`), automated smoke test suite, TypeScript compiler verification (`tsc --noEmit`).
+
+---
+
+## 🧠 Models Used
+
+| Model | Size | Architecture | Execution Mode | Purpose |
+|---|---|---|---|---|
+| **[Shield-82M](https://huggingface.co/onnx-community/Shield-82M-ONNX)** | ~82 MB (Quantized) | ONNX Transformer | On-Device WASM SIMD (Offscreen Document) | Contextual PII classification, ambiguous named-entity recognition, and sensitive category identification |
+| **Deterministic Rule Engine** | Native Regex / Heuristics | Zero-memory AST/Regex Matcher | Synchronous In-Memory (<0.1ms) | Instant deterministic detection for API keys, AWS tokens, JWTs, emails, phone numbers, cards, and passwords |
+
+---
+
+## 🎨 Assets & UI Components
+
+- **iOS-Inspired Design System:** Clean, native Apple Settings aesthetic (`public/popup.css`, `src/content/overlay/input-theme.ts`) with custom glassmorphism, responsive light/dark modes, and refined typography.
+- **Vector Brand Assets:** High-resolution icons and vector shields (`public/icons/tekasend-logo-*.png`, inline SVG icons).
+- **Canvas Spoiler Particle Shaders:** Custom multiline canvas particle spoiler rendering with smooth physics and reduced-motion accessibility support.
+- **Interactive Live Demo Sandbox:** Full local test environment (`serve-demo.mjs`) simulating modern AI chatbot prompt interfaces.
+
+---
+
+## 🔍 Disclosures
+
+- **What runs locally:** **100% of all AI inference, regex detection, token replacements, and UI rendering execute locally on the user's machine.**
+- **What requires internet:** A one-time model download during initial setup (`npm run model:download`).
+- **APIs & Cloud Services:** None. Zero external cloud AI APIs used.
+- **AI Development Tools:** AI-assisted pair programming and code review (Antigravity IDE / Gemini).
+
+---
+
+## 🚀 Getting Started & Local Setup
+
+### Prerequisites
+- **Node.js 20+** installed
+- **Google Chrome** (or Chromium-based browser)
+
+### 1. Installation & Build
+
+In your terminal / PowerShell:
+
+```bash
+# Clone repository
+git clone https://github.com/Sanik0/TekaSend.git
+cd TekaSend
+
+# Install dependencies
+npm install
+
+# Download the Shield-82M quantized local model (one-time download into .local-model/)
+npm run model:download
+
+# Build the extension package into dist/
+npm run build
 ```
 
-`model:download` fetches the [Shield-82M ONNX model](https://huggingface.co/onnx-community/Shield-82M-ONNX) at a pinned revision, including its roughly 82 MB quantized model file, into `.local-model/`. The build copies this model and the matching ONNX Runtime Web files into `dist/`. Both folders are ignored by Git. The download needs an internet connection once; the built extension uses the packaged model locally and does not need a local AI server or an API key.
+### 2. Load into Chrome
 
-Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select this project's `dist` folder. After each build or pull, click **Reload** on TekaSend in that page, then refresh the webpage you want to scan. Reloading the extension alone does not replace content scripts already running in open pages.
+1. Open Chrome and navigate to `chrome://extensions`.
+2. Enable **Developer mode** in the top-right corner.
+3. Click **Load unpacked** and select the `dist/` directory inside this project.
+4. *(Recommended)* Under TekaSend's **Details**, set **Site access** to **On all sites** and enable **Allow access to file URLs** for local testing.
 
-For coverage across sites, open TekaSend's **Details** in `chrome://extensions` and set **Site access** to **On all sites**. To scan a local `file://` page, also enable **Allow access to file URLs**. Chrome requires these user-controlled settings even when the extension declares matching pages.
+### 3. Run Live Interactive Demo
 
-For the sample page, run `npm.cmd run demo` in a second terminal and open `http://127.0.0.1:8000/`. If XAMPP serves this folder, use `http://localhost/AppBuilders_hackathon_app/demo/` instead. Try clicking a colored match, pasting `alex@example.com` into the textarea, and adding a dynamic sample line. Click **Scan Active Page** to test the local model on the synthetic person and address.
+```bash
+npm run demo
+```
 
-The deterministic local rules work without downloading the model. The **Scan Active Page** button uses the packaged on-device model when available. The first scan can take longer while Chrome initializes it. OpenAI fallback is off by default and only runs if you explicitly enable it in the popup and local inference fails. Older `aiEnabled` settings do not enable cloud fallback; use **Remove key** in the popup to delete a saved API key.
+Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/) in Chrome.
+- Type or paste an API key (e.g. `sk-proj-1234567890abcdef...`) or email into the prompt box.
+- Notice the inline TekaSend shield icon and the non-intrusive highlighted tokens.
+- Click the shield or press `Alt+P` / `Alt+S` to test instant 1-click repairs!
 
-### If the pulled changes do not appear
+---
 
-1. Confirm Chrome loaded this project's `dist` folder, then run `npm.cmd run build` again.
-2. Click **Reload** for TekaSend at `chrome://extensions` and refresh the target webpage.
-3. If the local model does not initialize, check that `dist/models/onnx-community/Shield-82M-ONNX/onnx/model_quantized.onnx` and `dist/ort/ort-wasm-simd-threaded.asyncify.wasm` exist. Rerun `npm.cmd run model:download` if the model is missing, then rebuild.
-4. From the popup's DevTools Console, `chrome.runtime.sendMessage({ kind: 'MODEL_STATUS_REQUEST' }).then(console.log)` shows the model lifecycle state. It should reach `ready` after a successful scan. If it reports an error, inspect the extension's service worker and offscreen document in `chrome://extensions` for details.
+## ⌨️ Keyboard Shortcuts
 
-## Behavior and limits
+| Shortcut | Action |
+|---|---|
+| `Alt + P` / `Option + P` | Instantly replace all detected secrets with Semantic Placeholders |
+| `Alt + S` / `Option + S` | Instantly scramble all detected secrets with Synthetic Dummies |
+| `Ctrl + Z` / `Cmd + Z` | Undo the last privacy repair and restore original field state |
 
-- Red highlights: passwords, key formats, bearer tokens, private key headers. Yellow: names, emails, and Philippine mobile numbers. The fast name rule catches likely full names and single names after labels such as `Name:` or `Dear`; the local model can recognize other single names when context is clear. Name detection is heuristic, so some names may be missed or ordinary capitalized phrases may be flagged.
-- Choose **Blur**, **Replace values**, **Placeholder**, or **Spoiler** in the popup. Turn on **Hide by default** to apply that effect automatically to detected sensitive text when a page loads or adds new content. The switch is off by default and also updates open pages. Click masked text to reveal the highlighted original; when the switch is off, click a highlight to apply the selected effect. Right-clicking text uses the browser's normal menu. Selecting arbitrary page text does not create a TekaSend mask.
-- Turn off **Show hover tips** under Appearance to hide hints over detected text. Input warnings remain available.
-- **Blur** uses soft focus. **Spoiler** uses floating particles that follow wrapped lines. On systems that request reduced motion, the particles stay still. Images use the webpage's normal click and context-menu behavior.
-- Dummy text uses different characters while keeping the same visible character count. The replacement has no highlight background.
-- Input fields, textareas, and editable prompts show overlay highlights and a nearby indicator when sensitive text is entered or pasted. The indicator can replace detected values with placeholders or scrambled text and restore them; `Alt+P` applies placeholders and `Alt+S` scrambles the active field.
-- Page-text masking is visual. Input repair changes the field value, but the site may already have read the original. TekaSend does **not** sanitize other tabs, network requests, or the page's own JavaScript state.
-- The content script runs on ordinary `http`, `https`, and permitted `file` pages, including matching frames and page-created `about:blank`/`blob:` frames. It also checks text in code blocks. Chrome internal pages and other protected browser pages remain unavailable to content scripts. Reload any already-open webpage after installation or an extension update.
+---
 
-## Development
+## 🧪 Testing & Verification
 
-Run `npm.cmd run watch` while editing, then reload the extension and page. If you download the model while watch mode is running, restart watch so the model is copied into `dist`. Run `npm.cmd run typecheck` and `npm.cmd test` to check source and detection cases.
+```bash
+# Run comprehensive test suite (32 unit & integration tests)
+npm test
+
+# Run end-to-end smoke verification pipeline
+npm run smoke
+
+# TypeScript type check
+npm run typecheck
+```
+
+---
+
+## 📄 License
+
+MIT License. Developed for the **AppBuildersPH Hackathon 2026**.
