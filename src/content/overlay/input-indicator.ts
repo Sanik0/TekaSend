@@ -162,6 +162,13 @@ export class InputIndicatorOverlay {
     this.wrapper.style.right = `${Math.max(6, trailingRight)}px`;
     this.wrapper.style.top = `${verticalTop}px`;
 
+    // Keep the popover within the viewport when the field is narrow or left-aligned.
+    const cardWidth = Math.min(320, window.innerWidth - 20);
+    const wrapperRight = Math.max(6, trailingRight);
+    const wrapperRightEdge = window.innerWidth - wrapperRight;
+    const cardLeft = Math.max(10, Math.min(wrapperRightEdge - cardWidth, window.innerWidth - cardWidth - 10));
+    this.noticeCard.style.right = `${wrapperRightEdge - cardLeft - cardWidth}px`;
+
     this.updateCardPlacement(bounds);
   }
 

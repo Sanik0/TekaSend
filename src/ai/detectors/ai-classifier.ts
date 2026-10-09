@@ -6,6 +6,7 @@
  */
 
 import { ModelPipelineManager, ProgressCallback } from '../engine/pipeline.js';
+import { hasPersonContext, isPlausiblePersonName } from '../../name-detect.js';
 import {
   FindingCategory,
   FindingSeverity,
@@ -131,7 +132,12 @@ export class AiClassifier {
         merged.push(finding);
       }
     }
-    return merged;
+    return merged.filter(finding => {
+      if (finding.category !== 'person_name') return true;
+      return isPlausiblePersonName(finding.rawText, sourceText, finding.start)
+        && (finding.confidence >= 0.85 ||
+          (finding.confidence >= 0.75 && hasPersonContext(sourceText, finding.start, finding.end)));
+    });
   }
 
   /**

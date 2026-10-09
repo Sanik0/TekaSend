@@ -10,6 +10,8 @@ import type { SensitiveFinding, RepairStrategyType } from './ai/types.js';
 import { InputObserver, type FieldChangeEvent } from './content/observer/input-observer.js';
 import { InputIndicatorOverlay, type ProtectedItem } from './content/overlay/input-indicator.js';
 import { InputHighlighter } from './content/overlay/input-highlighter.js';
+import { installInputTheme } from './content/overlay/input-theme.js';
+import { isPlausiblePersonName } from './name-detect.js';
 
 type Action = Effect | 'restore';
 type DetectionCategory = 'apiKey' | 'password' | 'personal' | 'financial';
@@ -436,6 +438,13 @@ const inputIndicator = new InputIndicatorOverlay(shadow, {
   },
 });
 
+installInputTheme(shadow);
+
+function applyInputTheme(theme: unknown): void {
+  if (theme === 'light' || theme === 'dark') host.setAttribute('data-theme', theme);
+  else host.removeAttribute('data-theme');
+}
+
 // Initialize Input Field Observer for AI chatbot prompts and forms
 const inputObserver = new InputObserver(
   (event: FieldChangeEvent) => {
@@ -770,8 +779,9 @@ function refreshHighlights(): void {
   }
 }
 
-const settingsReady = chrome.storage.local.get([...categoryKeys.map(storageCategoryKey), 'defaultEffect', 'hideByDefault', 'showHoverTooltip'])
+const settingsReady = chrome.storage.local.get([...categoryKeys.map(storageCategoryKey), 'defaultEffect', 'hideByDefault', 'showHoverTooltip', 'themeMode'])
   .then(settings => {
+    applyInputTheme(settings.themeMode);
     for (const category of categoryKeys) enabledCategories[category] = settings[storageCategoryKey(category)] !== false;
     if (isEffect(settings.defaultEffect)) selectedEffect = settings.defaultEffect;
     hideByDefault = settings.hideByDefault === true;
@@ -911,7 +921,12 @@ async function scanAi(force = false): Promise<{ ok: boolean; error?: string; pro
   const text = (document.body.innerText || '').slice(0, 5000);
   const { findings, provider } = await analyzeWithAi(text);
   if (aiError) return { ok: false, error: aiError };
-  const found = findings.filter(item => categoryEnabled(item.type, item.category));
+  const found = findings.filter(item => {
+    if (!categoryEnabled(item.type, item.category)) return false;
+    if ((item.category ?? mapTypeToCategory(item.type)) !== 'person_name') return true;
+    const start = text.indexOf(item.text);
+    return start >= 0 && isPlausiblePersonName(item.text, text, start);
+  });
 
   const breakdown = {
     apiKey: 0,
@@ -967,6 +982,7 @@ chrome.runtime.onMessage.addListener((message: { kind?: string }, _sender, respo
 });
 
 chrome.storage.onChanged.addListener(changes => {
+  if (changes.themeMode) applyInputTheme(changes.themeMode.newValue);
   if (changes.showHoverTooltip) {
     showHoverTooltip = changes.showHoverTooltip.newValue !== false;
     if (!showHoverTooltip) {
